@@ -71,18 +71,11 @@ bool verify_root_access(int pid) noexcept
     if (getuid() == 0 || geteuid() == 0)
         return true;
 
-    // 2. Prueba de acceso a directorios de sistema de PlayStation 5 (/user/home o /user/app)
+    // 2. Prueba de acceso a directorios de sistema de PlayStation 5 (/user/home)
     DIR *dir_home = opendir("/user/home");
     if (dir_home)
     {
         closedir(dir_home);
-        return true;
-    }
-
-    DIR *dir_app = opendir("/user/app");
-    if (dir_app)
-    {
-        closedir(dir_app);
         return true;
     }
 

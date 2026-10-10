@@ -68,6 +68,21 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
 bool copy_directory_recursive(const std::string &src_dir, const std::string &dst_dir,
                               int &files_count, std::uint64_t &bytes_copied)
 {
+    struct stat src_st{};
+    if (stat(src_dir.c_str(), &src_st) == 0 && S_ISREG(src_st.st_mode))
+    {
+        mkdir(dst_dir.c_str(), 0777);
+        std::size_t slash = src_dir.find_last_of('/');
+        std::string filename = (slash != std::string::npos) ? src_dir.substr(slash + 1) : src_dir;
+        std::string dst_file = dst_dir + "/" + filename;
+        if (copy_file_with_fsync(src_dir, dst_file, bytes_copied))
+        {
+            files_count++;
+            return true;
+        }
+        return false;
+    }
+
     mkdir(dst_dir.c_str(), 0777);
 
     DIR *dir = opendir(src_dir.c_str());
@@ -213,9 +228,18 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
         return res;
     }
 
+    std::string dst_target = game.save_path;
+    struct stat save_st{};
+    if (stat(game.save_path.c_str(), &save_st) == 0 && S_ISREG(save_st.st_mode))
+    {
+        std::size_t slash = game.save_path.find_last_of('/');
+        if (slash != std::string::npos)
+            dst_target = game.save_path.substr(0, slash);
+    }
+
     int files_count = 0;
     std::uint64_t bytes_copied = 0;
-    const bool ok = copy_directory_recursive(backup_game_folder, game.save_path, files_count,
+    const bool ok = copy_directory_recursive(backup_game_folder, dst_target, files_count,
                                             bytes_copied);
 
     // Sincronizar buffers de disco y vnodes

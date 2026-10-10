@@ -27,10 +27,8 @@ extern "C"
     int sceHttpDeleteTemplate(int tmpl);
     int sceHttpSetAutoRedirect(int tmpl, int auto_redirect);
     int sceHttpSetResolveTimeOut(int tmpl, std::uint32_t timeout_us);
-    int sceHttpSetConnectTimeOut(int tmpl, std::uint32_t timeout_us);
-    int sceHttpSetSendTimeOut(int tmpl, std::uint32_t timeout_us);
-    int sceHttpSetRecvTimeOut(int tmpl, std::uint32_t timeout_us);
     int sceHttpsEnableOption(int tmpl, std::uint32_t options);
+    int sceHttpsDisableOption(int tmpl, std::uint32_t options);
     int sceHttpCreateConnectionWithURL(int tmpl, const char *url, int flags);
     int sceHttpDeleteConnection(int conn);
     int sceHttpCreateRequestWithURL(int conn, int method, const char *url, std::uint64_t body_len);
@@ -110,46 +108,44 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
     HttpResponse resp;
 
 #if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-    static bool s_net_inited = false;
-    if (!s_net_inited)
+    static int s_pool = -1;
+    static int s_ssl = -1;
+    static int s_http = -1;
+    static std::mutex s_http_mutex;
+    std::lock_guard<std::mutex> net_lock(s_http_mutex);
+
+    if (s_http < 0)
     {
         (void)sceNetInit();
-        s_net_inited = true;
+        s_pool = sceNetPoolCreate("MacheteNet", 1024 * 1024, 0);
+        if (s_pool < 0)
+        {
+            resp.error = "Error al crear pool de red (0x" + std::to_string(s_pool) + ")";
+            return resp;
+        }
+
+        s_ssl = sceSslInit(2 * 1024 * 1024);
+        if (s_ssl < 0)
+        {
+            resp.error = "Error al inicializar SSL (0x" + std::to_string(s_ssl) + ")";
+            return resp;
+        }
+
+        s_http = sceHttpInit(s_pool, s_ssl, 4 * 1024 * 1024);
+        if (s_http < 0)
+        {
+            resp.error = "Error al inicializar sceHttp (0x" + std::to_string(s_http) + ")";
+            return resp;
+        }
     }
 
-    int pool = sceNetPoolCreate("MacheteNet", 1024 * 1024, 0);
-    if (pool < 0)
-    {
-        resp.error = "Error al crear pool de red (0x" + std::to_string(pool) + ")";
-        return resp;
-    }
-
-    int ssl = sceSslInit(2 * 1024 * 1024);
-    if (ssl < 0)
-    {
-        sceNetPoolDestroy(pool);
-        resp.error = "Error al inicializar SSL (0x" + std::to_string(ssl) + ")";
-        return resp;
-    }
-
-    int http = sceHttpInit(pool, ssl, 4 * 1024 * 1024);
-    if (http < 0)
-    {
-        sceSslTerm(ssl);
-        sceNetPoolDestroy(pool);
-        resp.error = "Error al inicializar sceHttp (0x" + std::to_string(http) + ")";
-        return resp;
-    }
-
-    int tmpl = sceHttpCreateTemplate(http, "MacheteSVG-PS5/1.0.0", 2, 0);
+    int tmpl = sceHttpCreateTemplate(s_http, "MacheteSVG-PS5/1.0.0", 2, 0);
     if (tmpl >= 0)
     {
         sceHttpSetAutoRedirect(tmpl, 1);
         sceHttpSetResolveTimeOut(tmpl, 8'000'000);
-        sceHttpSetConnectTimeOut(tmpl, 8'000'000);
-        sceHttpSetSendTimeOut(tmpl, 12'000'000);
-        sceHttpSetRecvTimeOut(tmpl, 12'000'000);
-        sceHttpsEnableOption(tmpl, 0x01 | 0x04 | 0x08 | 0x10 | 0x20 | 0x80);
+        sceHttpsDisableOption(tmpl, 0x01); // Desactivar verificacion estricta CA de Sony para compatibilidad
+        sceHttpsEnableOption(tmpl, 0x04 | 0x08 | 0x10 | 0x20 | 0x80);
 
         int conn = sceHttpCreateConnectionWithURL(tmpl, url.c_str(), 0);
         if (conn >= 0)
@@ -178,19 +174,19 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
                             break;
                         resp.body.append(buffer, static_cast<std::size_t>(read_bytes));
                         if (resp.body.size() > 4 * 1024 * 1024)
-                            break; // Límite de 4MB por respuesta
+                            break; // Limite de 4MB por respuesta
                     }
                 }
                 else
                 {
-                    resp.error = "Fallo de conexión o resolución DNS (sceHttpSendRequest: " +
+                    resp.error = "Fallo de conexion o resolucion DNS (sceHttpSendRequest: " +
                                  std::to_string(send_res) + ")";
                 }
                 sceHttpDeleteRequest(req);
             }
             else
             {
-                resp.error = "Error al crear petición HTTP";
+                resp.error = "Error al crear peticion HTTP";
             }
             sceHttpDeleteConnection(conn);
         }
@@ -204,10 +200,6 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
     {
         resp.error = "Error al crear plantilla HTTP";
     }
-
-    sceHttpTerm(http);
-    sceSslTerm(ssl);
-    sceNetPoolDestroy(pool);
 
 #else
     // Fallback en entorno Host (pruebas de escritorio sin hardware PS5)
@@ -545,10 +537,28 @@ void GoogleDrive::backup_save(const std::string &title_id, const std::string &ga
             };
 
             // Preparar metadatos o archivo de respaldo
-            std::string upload_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=media";
-            std::string dummy_payload = "MacheteSVG_Backup_" + title_id;
+            std::string payload;
+            if (!local_save_path.empty())
+            {
+                std::FILE *f = std::fopen(local_save_path.c_str(), "rb");
+                if (f)
+                {
+                    std::fseek(f, 0, SEEK_END);
+                    const long sz = std::ftell(f);
+                    std::fseek(f, 0, SEEK_SET);
+                    if (sz > 0 && sz <= 10 * 1024 * 1024)
+                    {
+                        payload.resize(static_cast<std::size_t>(sz));
+                        std::fread(payload.data(), 1, payload.size(), f);
+                    }
+                    std::fclose(f);
+                }
+            }
+            if (payload.empty())
+                payload = "MacheteSVG_Backup_" + title_id + " - " + game_name;
 
-            HttpResponse resp = execute_http_request(upload_url, 1, dummy_payload, headers);
+            std::string upload_url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=media";
+            HttpResponse resp = execute_http_request(upload_url, 1, payload, headers);
 
             sync_progress_.store(1.0f);
             sync_state_.store(SyncState::Complete);

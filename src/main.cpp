@@ -28,7 +28,7 @@
 
 #include <cstring>
 #include <GL/glcorearb.h>
-
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -153,6 +153,7 @@ bool save_picture(const std::string &path, int width, int height)
 int main()
 {
     using namespace hui;
+    std::signal(SIGPIPE, SIG_IGN);
     sys::log("[HUI] entry");
 
     sys::log("[HUI] storage dir=%d", save::ensure_directory(kDataRoot) ? 1 : 0);
@@ -187,11 +188,6 @@ int main()
         sys::park();
     }
     demo::Catalog catalog;
-    const std::int64_t art_start = sys::monotonic_us();
-    if (!catalog.build_covers(renderer, fonts))
-        sys::log("[HUI] cover art failed; designs draw without it");
-    sys::log("[HUI] cover art %zu covers in %lld ms", catalog.size(),
-             static_cast<long long>((sys::monotonic_us() - art_start) / 1000));
 
     ps5::Pad pad;
     pad.open();

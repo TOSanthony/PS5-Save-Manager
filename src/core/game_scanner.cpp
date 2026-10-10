@@ -158,8 +158,8 @@ std::string extract_title_from_param_json(const std::string &param_path)
     if (first_char == std::string::npos || content[first_char] != '{')
         return "";
 
-    // 1. Intentar buscar "titleName": "..."
-    for (const char *key : {"\"titleName\"", "\"title\""})
+    // 1. Intentar buscar "titleName": "...", "title": "...", etc.
+    for (const char *key : {"\"titleName\"", "\"title\"", "\"name\"", "\"titleText\""})
     {
         std::size_t pos = content.find(key);
         if (pos != std::string::npos)
@@ -233,26 +233,40 @@ std::string extract_title_from_param_sfo(const std::string &sfo_path)
         return "";
     }
 
-    // Leer tabla de claves
+    // Leer tabla de claves con proteccion de rango
+    if (key_table_offset > 65536 || data_table_offset > 524288 || data_table_offset <= key_table_offset)
+    {
+        std::fclose(f);
+        return "";
+    }
+
     std::fseek(f, static_cast<long>(key_table_offset), SEEK_SET);
-    const std::size_t keys_size = (data_table_offset > key_table_offset)
-                                      ? static_cast<std::size_t>(data_table_offset - key_table_offset)
-                                      : 1024;
+    const std::size_t keys_size = static_cast<std::size_t>(data_table_offset - key_table_offset);
+    if (keys_size > 32768)
+    {
+        std::fclose(f);
+        return "";
+    }
+
     std::vector<char> keys(keys_size + 1, 0);
     std::fread(keys.data(), 1, keys_size, f);
 
-    // Buscar "TITLE"
+    // Buscar "TITLE" o "TITLE_" (localizado)
     for (const auto &entry : entries)
     {
-        if (entry.key_offset < keys_size && std::strcmp(&keys[entry.key_offset], "TITLE") == 0)
+        if (entry.key_offset < keys_size)
         {
-            if (entry.data_len > 0 && entry.data_len < 512)
+            const char *key_str = &keys[entry.key_offset];
+            if (std::strcmp(key_str, "TITLE") == 0 || std::strncmp(key_str, "TITLE_", 6) == 0)
             {
-                std::fseek(f, static_cast<long>(data_table_offset + entry.data_offset), SEEK_SET);
-                std::vector<char> val(entry.data_len + 1, 0);
-                std::fread(val.data(), 1, entry.data_len, f);
-                std::fclose(f);
-                return std::string(val.data());
+                if (entry.data_len > 0 && entry.data_len < 512)
+                {
+                    std::fseek(f, static_cast<long>(data_table_offset + entry.data_offset), SEEK_SET);
+                    std::vector<char> val(entry.data_len + 1, 0);
+                    std::fread(val.data(), 1, entry.data_len, f);
+                    std::fclose(f);
+                    return std::string(val.data());
+                }
             }
         }
     }
@@ -287,17 +301,15 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
 
     // =========================================================================
     // 1. Escanear Metadatos de Aplicaciones Instaladas Reales
-    //    En PS5, el directorio canónico de metadatos de títulos instalados es:
+    //    En PS5, el directorio canonico de metadatos de titulos instalados es:
     //    /user/appmeta/ (interno) y /mnt/ext0/user/appmeta / /mnt/ext1/user/appmeta (externo)
+    //    NOTA CRITICA: NUNCA escanear /user/app (punto de montaje PFS de contenedores cifrados)
     // =========================================================================
     const char *meta_bases[] = {
         "/user/appmeta",
         "/mnt/ext0/user/appmeta",
         "/mnt/ext1/user/appmeta",
         "/data/homebrew",
-        "/user/app",
-        "/mnt/ext0/user/app",
-        "/mnt/ext1/user/app",
     };
 
     for (const char *meta_base : meta_bases)
@@ -325,9 +337,11 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
             if (game.icon_path.empty())
             {
                 for (const std::string &p : {
-                         std::string("/user/appmeta/") + title_id + "/icon0.png",
                          entry_path + "/icon0.png",
                          entry_path + "/sce_sys/icon0.png",
+                         std::string("/user/appmeta/") + title_id + "/icon0.png",
+                         std::string("/mnt/ext0/user/appmeta/") + title_id + "/icon0.png",
+                         std::string("/mnt/ext1/user/appmeta/") + title_id + "/icon0.png",
                      })
                 {
                     if (file_exists(p))
@@ -341,18 +355,20 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
             // Nombre oficial del juego
             if (game.title.empty() || game.title == title_id)
             {
-                if (file_exists(std::string("/user/appmeta/") + title_id + "/param.json"))
-                    game.title = extract_title_from_param_json(std::string("/user/appmeta/") + title_id + "/param.json");
+                if (file_exists(entry_path + "/param.json"))
+                    game.title = extract_title_from_param_json(entry_path + "/param.json");
                 if (game.title.empty() && file_exists(entry_path + "/sce_sys/param.json"))
                     game.title = extract_title_from_param_json(entry_path + "/sce_sys/param.json");
-                if (game.title.empty() && file_exists(entry_path + "/param.json"))
-                    game.title = extract_title_from_param_json(entry_path + "/param.json");
-                if (game.title.empty() && file_exists(std::string("/user/appmeta/") + title_id + "/param.sfo"))
-                    game.title = extract_title_from_param_sfo(std::string("/user/appmeta/") + title_id + "/param.sfo");
+                if (game.title.empty() && file_exists(entry_path + "/param.sfo"))
+                    game.title = extract_title_from_param_sfo(entry_path + "/param.sfo");
                 if (game.title.empty() && file_exists(entry_path + "/sce_sys/param.sfo"))
                     game.title = extract_title_from_param_sfo(entry_path + "/sce_sys/param.sfo");
                 if (game.title.empty() && file_exists(entry_path + "/sce_sys/PARAM.SFO"))
                     game.title = extract_title_from_param_sfo(entry_path + "/sce_sys/PARAM.SFO");
+                if (game.title.empty() && file_exists(std::string("/user/appmeta/") + title_id + "/param.json"))
+                    game.title = extract_title_from_param_json(std::string("/user/appmeta/") + title_id + "/param.json");
+                if (game.title.empty() && file_exists(std::string("/user/appmeta/") + title_id + "/param.sfo"))
+                    game.title = extract_title_from_param_sfo(std::string("/user/appmeta/") + title_id + "/param.sfo");
             }
 
             if (game.size_str.empty())
@@ -407,31 +423,37 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                     if (game.save_path.empty())
                         game.save_path = game_save_item;
 
-                    // Si aún no tenía título, buscar en appmeta
+                    // Si aun no tenia titulo, buscar en metadatos conocidos
                     if (game.title.empty() || game.title == title_id)
                     {
-                        if (file_exists(std::string("/user/appmeta/") + title_id + "/param.json"))
-                            game.title = extract_title_from_param_json(std::string("/user/appmeta/") + title_id + "/param.json");
-                        if (game.title.empty() && file_exists(std::string("/user/appmeta/") + title_id + "/param.sfo"))
-                            game.title = extract_title_from_param_sfo(std::string("/user/appmeta/") + title_id + "/param.sfo");
-                        if (game.title.empty() && file_exists(game_save_item + "/sce_sys/param.json"))
-                            game.title = extract_title_from_param_json(game_save_item + "/sce_sys/param.json");
-                        if (game.title.empty() && file_exists(game_save_item + "/sce_sys/param.sfo"))
-                            game.title = extract_title_from_param_sfo(game_save_item + "/sce_sys/param.sfo");
+                        for (const char *base : {"/user/appmeta", "/mnt/ext0/user/appmeta", "/mnt/ext1/user/appmeta", "/data/homebrew"})
+                        {
+                            const std::string p_json = std::string(base) + "/" + title_id + "/param.json";
+                            if (file_exists(p_json))
+                            {
+                                game.title = extract_title_from_param_json(p_json);
+                                if (!game.title.empty())
+                                    break;
+                            }
+                            const std::string p_sfo = std::string(base) + "/" + title_id + "/param.sfo";
+                            if (file_exists(p_sfo))
+                            {
+                                game.title = extract_title_from_param_sfo(p_sfo);
+                                if (!game.title.empty())
+                                    break;
+                            }
+                        }
                     }
 
-                    // Si no tenía icono, buscar en appmeta
+                    // Si no tenia icono, buscar en metadatos conocidos
                     if (game.icon_path.empty())
                     {
-                        for (const std::string &p : {
-                                 std::string("/user/appmeta/") + title_id + "/icon0.png",
-                                 game_save_item + "/sce_sys/icon0.png",
-                                 game_save_item + "/icon0.png",
-                             })
+                        for (const char *base : {"/user/appmeta", "/mnt/ext0/user/appmeta", "/mnt/ext1/user/appmeta", "/data/homebrew"})
                         {
-                            if (file_exists(p))
+                            const std::string p_ico = std::string(base) + "/" + title_id + "/icon0.png";
+                            if (file_exists(p_ico))
                             {
-                                game.icon_path = p;
+                                game.icon_path = p_ico;
                                 break;
                             }
                         }
@@ -439,7 +461,7 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
 
                     game.has_keystone = true;
 
-                    // Acumular tamaño total de partidas para este título y registrar última fecha
+                    // Acumular tamano total de partidas para este titulo y registrar ultima fecha
                     std::time_t mtime = 0;
                     const std::uint64_t bytes = calculate_dir_size_and_mtime(game_save_item, mtime);
                     if (bytes > 0)
@@ -460,22 +482,32 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     }
 
     // =========================================================================
-    // 3. Limpieza de nombres por defecto si no tenían param.json/param.sfo
+    // 3. Filtrar entradas fantasma (sin partidas guardadas Y sin metadatos reales)
     // =========================================================================
+    std::vector<ScannedGame> valid_games;
+    valid_games.reserve(games.size());
     for (auto &game : games)
     {
-        if (game.title.empty())
-            game.title = game.title_id;
+        const bool has_saves = (game.total_bytes > 0 || !game.save_path.empty());
+        const bool has_real_title = (!game.title.empty() && game.title != game.title_id);
+        const bool has_icon = (!game.icon_path.empty());
+
+        if (has_saves || has_real_title || has_icon)
+        {
+            if (game.title.empty())
+                game.title = game.title_id;
+            valid_games.push_back(std::move(game));
+        }
     }
 
-    // Ordenar: primero aquellos con partidas guardadas (bytes > 0), luego por título
-    std::sort(games.begin(), games.end(), [](const ScannedGame &a, const ScannedGame &b) {
+    // Ordenar: primero aquellos con partidas guardadas (bytes > 0), luego por titulo
+    std::sort(valid_games.begin(), valid_games.end(), [](const ScannedGame &a, const ScannedGame &b) {
         if ((a.total_bytes > 0) != (b.total_bytes > 0))
             return a.total_bytes > b.total_bytes;
         return a.title < b.title;
     });
 
-    return games;
+    return valid_games;
 }
 
 void load_game_icon_textures(std::vector<ScannedGame> &games)
