@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MacheteSVG - PS5 Save Manager</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 1920px;
+      height: 1080px;
+      background: #060913 radial-gradient(circle at 85% 15%, rgba(68, 102, 242, 0.28) 0%, transparent 55%),
+                  radial-gradient(circle at 10% 90%, rgba(118, 214, 255, 0.22) 0%, transparent 45%),
+                  linear-gradient(135deg, #060914 0%, #0d132b 50%, #12193b 100%);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #ffffff;
+      overflow: hidden;
+      padding: 48px 64px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    /* Frosted Liquid Glass Panel */
+    .glass-panel {
+      background: rgba(13, 19, 41, 0.72);
+      backdrop-filter: blur(28px);
+      -webkit-backdrop-filter: blur(28px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 16px 48px 0 rgba(0, 0, 0, 0.55);
+      border-radius: 20px;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      height: 80px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+    .logo-img {
+      width: 64px;
+      height: 64px;
+      border-radius: 16px;
+      border: 1.5px solid rgba(118, 214, 255, 0.5);
+      box-shadow: 0 0 24px rgba(118, 214, 255, 0.35);
+      object-fit: cover;
+    }
+    .brand-title {
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .version-tag {
+      font-size: 13px;
+      font-weight: 700;
+      color: #76d6ff;
+      background: rgba(118, 214, 255, 0.16);
+      border: 1px solid rgba(118, 214, 255, 0.35);
+      padding: 3px 10px;
+      border-radius: 999px;
+      letter-spacing: 0.5px;
+    }
+    .brand-subtitle {
+      font-size: 15px;
+      color: rgba(163, 215, 255, 0.75);
+      font-weight: 500;
+      margin-top: 2px;
+    }
+    .header-chips {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .chip {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      padding: 10px 20px;
+      border-radius: 999px;
+      font-size: 15px;
+      font-weight: 600;
+      backdrop-filter: blur(16px);
+    }
+    .dot-green {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #38ef7d;
+      box-shadow: 0 0 10px #38ef7d;
+    }
+    .dot-cyan {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #76d6ff;
+      box-shadow: 0 0 10px #76d6ff;
+    }
+
+    /* Main Grid */
+    .main-content {
+      display: grid;
+      grid-template-columns: 660px 1fr;
+      gap: 36px;
+      height: 780px;
+      margin-top: 18px;
+    }
+
+    /* Left Panel: Game List */
+    .games-panel {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel-header {
+      padding: 24px 28px 18px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .panel-header-title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      color: rgba(255, 255, 255, 0.55);
+      text-transform: uppercase;
+    }
+    .panel-header-count {
+      font-size: 14px;
+      font-weight: 600;
+      color: #76d6ff;
+      background: rgba(118, 214, 255, 0.12);
+      padding: 4px 12px;
+      border-radius: 8px;
+    }
+    .games-list {
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow-y: auto;
+    }
+    .game-card {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 16px 20px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      transition: all 0.2s ease;
+    }
+    .game-card.active {
+      background: rgba(118, 214, 255, 0.14);
+      border: 1.5px solid #76d6ff;
+      box-shadow: 0 0 24px rgba(118, 214, 255, 0.2);
+    }
+    .game-thumb {
+      width: 64px;
+      height: 64px;
+      border-radius: 12px;
+      background: #151d38;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 18px;
+      color: #76d6ff;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    }
+    .game-meta h3 {
+      font-size: 19px;
+      font-weight: 700;
+      color: #ffffff;
+      margin-bottom: 4px;
+    }
+    .game-meta p {
+      font-size: 14px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.55);
+    }
+    .badge-ps5 {
+      background: rgba(56, 168, 232, 0.2);
+      color: #76d6ff;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 5px;
+      margin-right: 8px;
+    }
+    .badge-ps4 {
+      background: rgba(147, 51, 234, 0.25);
+      color: #c084fc;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 5px;
+      margin-right: 8px;
+    }
+
+    /* Right Panel: Game Details & Actions */
+    .details-panel {
+      padding: 36px 44px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .details-hero {
+      display: flex;
+      gap: 32px;
+      align-items: center;
+    }
+    .hero-poster {
+      width: 170px;
+      height: 170px;
+      border-radius: 20px;
+      background: linear-gradient(135deg, #182348 0%, #0d1326 100%);
+      border: 2px solid rgba(118, 214, 255, 0.45);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 38px;
+      font-weight: 900;
+      color: #76d6ff;
+    }
+    .hero-info h2 {
+      font-size: 38px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      margin-bottom: 8px;
+    }
+    .hero-info .meta-row {
+      font-size: 17px;
+      color: rgba(255, 255, 255, 0.65);
+      font-weight: 500;
+      margin-bottom: 6px;
+    }
+    .hero-info .time-row {
+      font-size: 16px;
+      color: #76d6ff;
+      font-weight: 600;
+    }
+
+    /* Keystone Status Box */
+    .section-label {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      color: rgba(255, 255, 255, 0.5);
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    .keystone-box {
+      background: rgba(20, 43, 31, 0.65);
+      border: 1px solid rgba(56, 239, 125, 0.35);
+      border-radius: 14px;
+      padding: 16px 22px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .keystone-text {
+      font-size: 17px;
+      font-weight: 600;
+      color: #a3ffcc;
+    }
+
+    /* Standard Storage Paths */
+    .paths-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+    .path-card {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 12px 18px;
+      border-radius: 10px;
+      font-size: 15px;
+      color: rgba(255, 255, 255, 0.7);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    /* Actions */
+    .actions-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      margin-bottom: 14px;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #76d6ff 0%, #38a8e8 100%);
+      color: #050f26;
+      border: none;
+      padding: 20px 28px;
+      border-radius: 14px;
+      font-size: 18px;
+      font-weight: 700;
+      box-shadow: 0 8px 24px rgba(118, 214, 255, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      color: #ffffff;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      padding: 20px 28px;
+      border-radius: 14px;
+      font-size: 18px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+    .btn-cloud-full {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(118, 214, 255, 0.25);
+      color: #76d6ff;
+      padding: 18px 28px;
+      border-radius: 14px;
+      font-size: 17px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      cursor: pointer;
+    }
+
+    /* Footer Hints */
+    .footer {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+      height: 44px;
+      font-size: 15px;
+      color: rgba(255, 255, 255, 0.65);
+      font-weight: 600;
+    }
+    .hint-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .kbd-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.14);
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      font-size: 12px;
+      font-weight: 800;
+      color: #ffffff;
+    }
+    .kbd-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2px 8px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.14);
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      font-size: 11px;
+      font-weight: 800;
+      color: #ffffff;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="brand">
+      <img src="icon0_512x512.png" class="logo-img" alt="MacheteSVG Emblem">
+      <div>
+        <div class="brand-title">
+          <span>MacheteSVG</span>
+          <span class="version-tag">PPSA99001 • v1.0.0</span>
+        </div>
+        <div class="brand-subtitle">Next-Gen PS5 Save Manager | Direct USB & Google Drive Cloud Backup</div>
+      </div>
+    </div>
+
+    <div class="header-chips">
+      <div class="chip">
+        <span class="dot-green"></span>
+        <span>Jailbreak Active (Root)</span>
+      </div>
+      <div class="chip">
+        <span class="dot-cyan"></span>
+        <span>Google Drive Connected (Δ)</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="main-content">
+    
+    <!-- Left: Game List -->
+    <div class="glass-panel games-panel">
+      <div class="panel-header">
+        <span class="panel-header-title">Detected Save Games</span>
+        <span class="panel-header-count">5 Games Found</span>
+      </div>
+      <div class="games-list">
+        
+        <!-- Game 1 (Active) -->
+        <div class="game-card active">
+          <div class="game-thumb">SM2</div>
+          <div class="game-meta">
+            <h3>Marvel's Spider-Man 2</h3>
+            <p><span class="badge-ps5">PS5</span> PPSA01411 • 14.2 MB</p>
+          </div>
+        </div>
+
+        <!-- Game 2 -->
+        <div class="game-card">
+          <div class="game-thumb" style="color: #f59e0b;">GOW</div>
+          <div class="game-meta">
+            <h3>God of War Ragnarök</h3>
+            <p><span class="badge-ps5">PS5</span> PPSA08331 • 8.1 MB</p>
+          </div>
+        </div>
+
+        <!-- Game 3 -->
+        <div class="game-card">
+          <div class="game-thumb" style="color: #c084fc;">BB</div>
+          <div class="game-meta">
+            <h3>Bloodborne</h3>
+            <p><span class="badge-ps4">PS4</span> CUSA03173 • 35.4 MB</p>
+          </div>
+        </div>
+
+        <!-- Game 4 -->
+        <div class="game-card">
+          <div class="game-thumb" style="color: #60a5fa;">ER</div>
+          <div class="game-meta">
+            <h3>Elden Ring</h3>
+            <p><span class="badge-ps5">PS5</span> PPSA04609 • 24.8 MB</p>
+          </div>
+        </div>
+
+        <!-- Game 5 -->
+        <div class="game-card">
+          <div class="game-thumb" style="color: #34d399;">AST</div>
+          <div class="game-meta">
+            <h3>Astro's Playroom</h3>
+            <p><span class="badge-ps5">PS5</span> PPSA01325 • 2.4 MB</p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Right: Details & Actions -->
+    <div class="glass-panel details-panel">
+      <div>
+        <div class="details-hero">
+          <div class="hero-poster">SM2</div>
+          <div class="hero-info">
+            <h2>Marvel's Spider-Man 2</h2>
+            <div class="meta-row">Platform: PS5 • Title ID: PPSA01411 • Slot 01 (14.2 MB)</div>
+            <div class="time-row">Last Activity: Today, 05:30 PM</div>
+          </div>
+        </div>
+
+        <div style="margin-top: 32px;">
+          <div class="section-label">Digital Integrity & Signature Status</div>
+          <div class="keystone-box">
+            <span class="dot-green"></span>
+            <span class="keystone-text">Keystone Verified - Protected against CE-108255-1 error</span>
+          </div>
+
+          <div class="section-label">Standardized Storage Locations (/MacheteSVG/)</div>
+          <div class="paths-grid">
+            <div class="path-card">Internal: /data/MacheteSVG/</div>
+            <div class="path-card">SSD: /mnt/ext1/MacheteSVG/</div>
+            <div class="path-card">USB: /mnt/usb0/MacheteSVG/</div>
+            <div class="path-card">Cloud: Google Drive</div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-label">Save Data Actions</div>
+        <div class="actions-row">
+          <button class="btn-primary">Backup Save Data</button>
+          <button class="btn-secondary">Restore Save Data</button>
+        </div>
+        <button class="btn-cloud-full">Sync with Google Drive</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Footer DualSense Hints -->
+  <div class="footer">
+    <div class="hint-item"><span class="kbd-pill">L2 / R2</span> Theme</div>
+    <div class="hint-item"><span class="kbd-pill">D-Pad</span> Navigate</div>
+    <div class="hint-item"><span class="kbd-btn">✕</span> Select</div>
+    <div class="hint-item"><span class="kbd-btn">○</span> Back</div>
+    <div class="hint-item"><span class="kbd-btn">Δ</span> Google Drive</div>
+    <div class="hint-item"><span class="kbd-btn">□</span> Refresh</div>
+    <div class="hint-item"><span class="kbd-pill">L3</span> Lang: EN (L3)</div>
+  </div>
+
+</body>
+</html>

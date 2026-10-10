@@ -1,0 +1,30 @@
+# MacheteSVG - Generated and local-only file exclusions.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+.local/
+.deps/
+results/
+.env
+__pycache__/
+*.pyc
+build/
+dist/
+**/bin/
+**/obj/
+.vs/
+.idea/
+*.user
+*.suo
+*.log
+.DS_Store
+etahen_jailbreak
+
+*.elf
+*.self
+*.sprx
+*.prx
+*.pkg
+
+# Keep required vendored runtime shims and embedded daemon
+!payloads/lapy_jb/lapy_jb_daemon.elf
+!runtime/libc.prx
