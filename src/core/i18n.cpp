@@ -8,7 +8,7 @@
 #include <cstring>
 #include <string>
 
-#if defined(__Prospero__) || defined(__PS5__)
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
 extern "C" {
     // sceSystemServiceParamGetInt is part of libSceSystemService
     int sceSystemServiceParamGetInt(int paramId, int *value);
@@ -204,7 +204,7 @@ const char *const s_strings[2][static_cast<std::size_t>(StringId::Count)] = {
 
 void init()
 {
-#if defined(__Prospero__) || defined(__PS5__)
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
     int lang = -1;
     // Parameter ID 1 corresponds to SCE_SYSTEM_SERVICE_PARAM_ID_LANG
     if (sceSystemServiceParamGetInt(1, &lang) == 0)

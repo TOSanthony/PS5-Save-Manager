@@ -27,7 +27,7 @@ constexpr const char *kEtahenJailbreakPath = "/download0/etahen_jailbreak";
 constexpr const char *kElevateProcPath = "/download0/elevate_proc";
 constexpr const char *kLapyResultPath = "/download0/lapy_owned_result";
 
-#if defined(__Prospero__) || defined(__PS5__)
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
 struct NetSockaddrIn
 {
     std::uint8_t length;
@@ -40,6 +40,7 @@ struct NetSockaddrIn
 
 extern "C"
 {
+    int sceNetInit(void);
     int sceNetConnect(int socket, const void *address, std::uint32_t address_length);
     int sceNetSend(int socket, const void *data, std::size_t length, int flags);
     int sceNetRecv(int socket, void *data, std::size_t length, int flags);
@@ -70,32 +71,7 @@ bool verify_root_access(int pid) noexcept
     if (getuid() == 0 || geteuid() == 0)
         return true;
 
-    // 2. Prueba definitiva de lectura/escritura bajo /data (patrón de verificación ProsperoStore)
-    char probe_path[96];
-    std::snprintf(probe_path, sizeof(probe_path), "/data/.machete_probe_%d", pid);
-    (void)unlink(probe_path);
-
-    const int fd = open(probe_path, O_RDWR | O_CREAT | O_EXCL, 0600);
-    if (fd >= 0)
-    {
-        constexpr const char kProbeToken[] = "MACHETE_ROOT_OK\n";
-        constexpr std::size_t kTokenLen = sizeof(kProbeToken) - 1;
-        char read_buf[32]{};
-
-        bool ok = write_all_fd(fd, kProbeToken, kTokenLen);
-        if (ok && lseek(fd, 0, SEEK_SET) == 0)
-        {
-            const auto bytes_read = read(fd, read_buf, kTokenLen);
-            ok = (bytes_read == static_cast<ssize_t>(kTokenLen)) &&
-                 (std::memcmp(read_buf, kProbeToken, kTokenLen) == 0);
-        }
-        close(fd);
-        (void)unlink(probe_path);
-        if (ok)
-            return true;
-    }
-
-    // 3. Prueba de listado de directorios privilegiados de PlayStation 5
+    // 2. Prueba de acceso a directorios de sistema de PlayStation 5 (/user/home o /user/app)
     DIR *dir_home = opendir("/user/home");
     if (dir_home)
     {
@@ -110,58 +86,63 @@ bool verify_root_access(int pid) noexcept
         return true;
     }
 
+    // 3. Prueba definitiva de lectura/escritura Y listado bajo /data (patrón ProsperoStore)
+    DIR *dir_data = opendir("/data");
+    if (dir_data)
+    {
+        closedir(dir_data);
+        char probe_path[96];
+        std::snprintf(probe_path, sizeof(probe_path), "/data/.machete_probe_%d", pid);
+        (void)unlink(probe_path);
+
+        const int fd = open(probe_path, O_RDWR | O_CREAT | O_EXCL, 0600);
+        if (fd >= 0)
+        {
+            close(fd);
+            (void)unlink(probe_path);
+            return true;
+        }
+    }
+
     return false;
 }
 
-// Publica la petición de elevación atómicamente mediante archivo temporal + rename
+// Publica la petición de elevación atómicamente
 bool publish_atomic_request(const char *target_path, int pid) noexcept
 {
-    char tmp_path[128];
     char body[64];
     const int body_len = std::snprintf(body, sizeof(body), "{\"PID\": %d}\n", pid);
-    const int tmp_len = std::snprintf(tmp_path, sizeof(tmp_path), "%s.%d.tmp", target_path, pid);
-
-    if (body_len <= 0 || tmp_len <= 0)
+    if (body_len <= 0)
         return false;
 
-    (void)unlink(tmp_path);
-    const int fd = open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    (void)unlink(target_path);
+    const int fd = open(target_path, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (fd < 0)
         return false;
 
-    if (!write_all_fd(fd, body, static_cast<std::size_t>(body_len)))
-    {
-        close(fd);
-        (void)unlink(tmp_path);
-        return false;
-    }
-
+    const bool ok = write_all_fd(fd, body, static_cast<std::size_t>(body_len));
     close(fd);
-    (void)chmod(tmp_path, 0666);
-
-    if (rename(tmp_path, target_path) != 0)
-    {
-        (void)unlink(tmp_path);
-        return false;
-    }
-
-    return true;
+    (void)chmod(target_path, 0666);
+    return ok;
 }
 
 } // namespace
 
 bool auto_launch_embedded_daemon()
 {
-#if defined(__Prospero__) || defined(__PS5__)
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+    static bool s_net_initialized = false;
+    if (!s_net_initialized)
+    {
+        (void)sceNetInit();
+        s_net_initialized = true;
+    }
+
     // Obtener los datos del demonio: probar rutas locales o usar el binario embebido en memoria
     const char *daemon_paths[] = {
-        "/app0/lapy.elf",
         "/app0/daemon/lapy_jb_daemon.elf",
-        "/system_ex/app/PPSA99001/lapy.elf",
         "/system_ex/app/PPSA99001/daemon/lapy_jb_daemon.elf",
-        "/data/homebrew/PPSA99001/lapy.elf",
         "/data/homebrew/PPSA99001/daemon/lapy_jb_daemon.elf",
-        "lapy.elf",
         "daemon/lapy_jb_daemon.elf",
     };
 
@@ -209,7 +190,7 @@ bool auto_launch_embedded_daemon()
             continue;
 
         constexpr int socket_level = 0xffff;
-        constexpr int timeout_us = 4'000'000;
+        constexpr int timeout_us = 3'000'000;
         sceNetSetsockopt(socket, socket_level, 0x1105, &timeout_us, sizeof(timeout_us)); // SO_RCVTIMEO
         sceNetSetsockopt(socket, socket_level, 0x1106, &timeout_us, sizeof(timeout_us)); // SO_SNDTIMEO
         sceNetSetsockopt(socket, socket_level, 0x1109, &timeout_us, sizeof(timeout_us)); // SO_CONNECTTIMEO
@@ -311,9 +292,9 @@ JailbreakInfo request_jailbreak()
     publish_atomic_request(kElevateProcPath, pid);
     info.status = JailbreakStatus::Requested;
 
-    // 3. Sondeo para demonio residente activo (hasta 1.5 segundos en pasos de 50ms)
+    // 3. Sondeo para demonio residente activo (hasta 500ms en pasos de 50ms)
     bool resident_claimed = false;
-    for (int i = 0; i < 30; ++i)
+    for (int i = 0; i < 10; ++i)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
@@ -341,10 +322,10 @@ JailbreakInfo request_jailbreak()
         }
     }
 
-    // 4. Si el demonio residente reclamó el marcador, darle un periodo de gracia adicional (hasta 1.5s)
+    // 4. Si el demonio residente reclamó el marcador, darle un periodo de gracia adicional (hasta 750ms)
     if (resident_claimed)
     {
-        for (int i = 0; i < 30; ++i)
+        for (int i = 0; i < 15; ++i)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             if (verify_root_access(pid))
@@ -373,14 +354,14 @@ JailbreakInfo request_jailbreak()
             is_es ? "Lapy JB Daemon (Auto-lanzado)" : "Lapy JB Daemon (Auto-launched)";
 
         // Pequeña pausa para permitir que el cargador inicialice el demonio
-        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         // Re-publicar peticiones para que el demonio recién arrancado las procese
         publish_atomic_request(kEtahenJailbreakPath, pid);
         publish_atomic_request(kElevateProcPath, pid);
 
-        // Esperar a que el demonio auto-lanzado complete la elevación (hasta 2.5 segundos)
-        for (int i = 0; i < 50; ++i)
+        // Esperar a que el demonio auto-lanzado complete la elevación (hasta 1.5 segundos)
+        for (int i = 0; i < 30; ++i)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             if (verify_root_access(pid))

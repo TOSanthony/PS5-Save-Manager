@@ -13,7 +13,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#if defined(__Prospero__) || defined(__PS5__)
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
 #include <GL/glcorearb.h>
 #endif
 
@@ -429,7 +429,7 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
 
 void load_game_icon_textures(std::vector<ScannedGame> &games)
 {
-#if defined(__Prospero__) || defined(__PS5__)
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
     for (auto &game : games)
     {
         if (game.icon_texture != 0 || game.icon_path.empty())
@@ -467,7 +467,7 @@ void load_game_icon_textures(std::vector<ScannedGame> &games)
 
 void release_game_icon_textures(std::vector<ScannedGame> &games)
 {
-#if defined(__Prospero__) || defined(__PS5__)
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
     for (auto &game : games)
     {
         if (game.icon_texture != 0)

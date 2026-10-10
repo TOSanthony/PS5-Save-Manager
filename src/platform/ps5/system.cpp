@@ -64,6 +64,8 @@ void sleep_us(std::uint32_t microseconds)
 void park()
 {
     std::fflush(nullptr);
+    const int rc = sceSystemServiceLoadExec("exit", nullptr);
+    (void)rc;
     for (;;)
         sceKernelUsleep(100000);
 }

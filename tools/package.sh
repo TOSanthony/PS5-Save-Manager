@@ -42,16 +42,14 @@ if [[ -f "$root/sce_sys/snd0.at9" ]]; then
     cp "$root/sce_sys/snd0.at9" "$dist_dir/sce_sys/"
 fi
 
-# Copiar Lapy JB Daemon integrado dentro de la estructura de la app (lapy.elf y daemon/lapy_jb_daemon.elf)
+# Copiar Lapy JB Daemon integrado dentro de la estructura de la app (daemon/lapy_jb_daemon.elf)
 mkdir -p "$dist_dir/daemon"
 if [[ -d "$root/payloads/lapy_jb" ]]; then
     cp -r "$root/payloads/lapy_jb/"* "$dist_dir/daemon/"
-    cp "$root/payloads/lapy_jb/lapy_jb_daemon.elf" "$dist_dir/lapy.elf" 2>/dev/null || true
     chmod 0777 "$dist_dir/daemon/lapy_jb_daemon.elf" 2>/dev/null || true
-    chmod 0777 "$dist_dir/lapy.elf" 2>/dev/null || true
 fi
-chmod 0777 "$dist_dir/eboot.bin"
-chmod 0777 "$dist_dir/sce_module/libc.prx" 2>/dev/null || true
+rm -f "$dist_dir/lapy.elf"
+chmod -R 0777 "$dist_dir"
 
 # Eliminar archivos obsoletos si existían
 rm -f "$dist_dir/INSTRUCCIONES_PS5.txt"
@@ -83,8 +81,7 @@ PACKAGE CONTENTS:
 - PPSA99001/sce_sys/param.json    (Title ID: PPSA99001 package metadata)
 - PPSA99001/sce_sys/icon0.png     (Official Liquid Glass Memory Card icon)
 - PPSA99001/assets/               (SDF fonts, UI graphics, soundbank)
-- PPSA99001/lapy.elf               (ProsperoStore standard root privilege helper)
-- PPSA99001/daemon/               (Embedded fallback privilege daemon)
+- PPSA99001/daemon/               (Embedded privilege escalation daemon)
 - PPSA99001/INSTRUCTIONS.txt      (Installation and operational guide)
 - PPSA99001/LEGAL.txt             (License, warranty, and trademark notices)
 
@@ -134,8 +131,7 @@ CONTENIDO DEL PAQUETE:
 - PPSA99001/sce_sys/param.json    (Metadatos de paquete Title ID: PPSA99001)
 - PPSA99001/sce_sys/icon0.png     (Icono oficial Liquid Glass Memory Card)
 - PPSA99001/assets/               (Fuentes SDF, gráficos de interfaz, banco de sonido)
-- PPSA99001/lapy.elf               (Ayudante estándar ProsperoStore para privilegios root)
-- PPSA99001/daemon/               (Demonio integrado de respaldo de privilegios root)
+- PPSA99001/daemon/               (Demonio integrado de privilegios root)
 - PPSA99001/INSTRUCTIONS.txt      (Guía de instalación y uso)
 - PPSA99001/LEGAL.txt             (Licencia, garantía y avisos legales)
 

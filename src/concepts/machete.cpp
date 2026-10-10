@@ -20,10 +20,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <mutex>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace hui::concepts
@@ -95,6 +98,8 @@ class Machete final : public app::Concept
 
     ~Machete() override
     {
+        if (jb_thread_.joinable())
+            jb_thread_.join();
         machete::scanner::release_game_icon_textures(games_);
     }
 
@@ -112,6 +117,28 @@ class Machete final : public app::Concept
         return kInfo;
     }
 
+    void start_async_jailbreak()
+    {
+        if (jb_thread_running_.exchange(true))
+            return;
+
+        if (jb_thread_.joinable())
+            jb_thread_.join();
+
+        jb_thread_ = std::thread([this]() {
+            const auto result = machete::jailbreak::request_jailbreak();
+            {
+                std::lock_guard<std::mutex> lock(jb_mutex_);
+                jb_info_ = result;
+            }
+            if (result.root_access)
+            {
+                jb_needs_refresh_.store(true);
+            }
+            jb_thread_running_.store(false);
+        });
+    }
+
     void enter() override
     {
         age_ = 0.0f;
@@ -121,14 +148,20 @@ class Machete final : public app::Concept
         storage_poll_timer_ = 0.0f;
         jb_poll_timer_ = 0.0f;
 
-        // 1. Solicitar elevación y escape del sandbox inmediatamente en el arranque
-        jb_info_ = machete::jailbreak::request_jailbreak();
+        // 1. Verificación instantánea sin bloqueo (< 1ms)
+        jb_info_ = machete::jailbreak::check_status();
 
         // 2. Escaneo de dispositivos de almacenamiento
         active_devices_ = machete::storage::scan_storage_devices();
 
-        // 3. Escaneo dinámico de juegos y partidas reales con privilegios
+        // 3. Escaneo dinámico de juegos y partidas
         refresh_games();
+
+        // 4. Si aún no tenemos privilegios root, lanzar elevación en segundo plano
+        if (!jb_info_.root_access)
+        {
+            start_async_jailbreak();
+        }
     }
 
     void refresh_games()
@@ -164,26 +197,35 @@ class Machete final : public app::Concept
             }
         }
 
-        // Sondeo automático y persistente de Jailbreak si está en Sandbox
+        // Notificación de elevación de privilegios completada en segundo plano
+        if (jb_needs_refresh_.exchange(false))
+        {
+            refresh_games();
+            const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+            std::snprintf(notification_text_, sizeof(notification_text_), "%s",
+                          is_es ? "Jailbreak Concedido Exitosamente"
+                                : "Jailbreak Granted Successfully");
+            notification_timer_ = 4.0f;
+            feedback.play(audio::Cue::welcome, 1.0f, 0.0f);
+        }
+
+        // Sondeo periódico no bloqueante de privilegios
         jb_poll_timer_ += dt;
-        if (jb_poll_timer_ >= 2.5f)
+        if (jb_poll_timer_ >= 3.0f)
         {
             jb_poll_timer_ = 0.0f;
-            const auto prev_status = jb_info_.status;
-            jb_info_ = machete::jailbreak::check_status();
-            if (jb_info_.status == machete::jailbreak::JailbreakStatus::Sandboxed)
+            if (!jb_info_.root_access && !jb_thread_running_.load())
             {
-                // Reintentar solicitud en segundo plano
-                machete::jailbreak::request_jailbreak();
-            }
-            else if (prev_status != machete::jailbreak::JailbreakStatus::Escaped &&
-                     jb_info_.status == machete::jailbreak::JailbreakStatus::Escaped)
-            {
-                std::snprintf(notification_text_, sizeof(notification_text_), "%s",
-                              machete::i18n::tr(machete::i18n::StringId::ToastJailbreakGranted));
-                notification_timer_ = 4.5f;
-                feedback.play(audio::Cue::welcome, 1.0f, 0.0f);
-                refresh_games();
+                const auto current = machete::jailbreak::check_status();
+                if (current.root_access)
+                {
+                    jb_info_ = current;
+                    refresh_games();
+                    notification_timer_ = 4.0f;
+                    std::snprintf(notification_text_, sizeof(notification_text_), "%s",
+                                  machete::i18n::tr(machete::i18n::StringId::ToastJailbreakGranted));
+                    feedback.play(audio::Cue::welcome, 1.0f, 0.0f);
+                }
             }
         }
 
@@ -211,9 +253,11 @@ class Machete final : public app::Concept
                 open_google_drive_dialog(feedback);
             }
         }
-        // Atajo Square: Recargar lista de juegos
+        // Atajo Square: Recargar lista de juegos y reintentar elevación si es necesario
         else if (input.is_pressed(Action::west))
         {
+            if (!jb_info_.root_access)
+                start_async_jailbreak();
             refresh_games();
             std::snprintf(notification_text_, sizeof(notification_text_),
                           machete::i18n::tr(machete::i18n::StringId::ToastScanUpdated), games_.size());
@@ -1178,6 +1222,10 @@ class Machete final : public app::Concept
     // Jailbreak Daemon y elevación en vivo
     machete::jailbreak::JailbreakInfo jb_info_;
     float jb_poll_timer_ = 0.0f;
+    std::thread jb_thread_;
+    std::atomic<bool> jb_thread_running_{false};
+    std::atomic<bool> jb_needs_refresh_{false};
+    std::mutex jb_mutex_;
 
     // Notificaciones
     float notification_timer_ = 0.0f;

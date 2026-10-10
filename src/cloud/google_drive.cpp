@@ -12,9 +12,11 @@
 #include <thread>
 #include <vector>
 
-#if defined(__Prospero__) || defined(__PS5__)
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
 extern "C"
 {
+    int sceNetInit(void);
+    int sceNetTerm(void);
     int sceNetPoolCreate(const char *name, int size, int flags);
     int sceNetPoolDestroy(int pool);
     int sceSslInit(std::size_t size);
@@ -107,7 +109,14 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
 {
     HttpResponse resp;
 
-#if defined(__Prospero__) || defined(__PS5__)
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+    static bool s_net_inited = false;
+    if (!s_net_inited)
+    {
+        (void)sceNetInit();
+        s_net_inited = true;
+    }
+
     int pool = sceNetPoolCreate("MacheteNet", 1024 * 1024, 0);
     if (pool < 0)
     {

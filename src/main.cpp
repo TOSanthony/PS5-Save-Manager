@@ -155,12 +155,6 @@ int main()
     using namespace hui;
     sys::log("[HUI] entry");
 
-    // Solicitar elevación y escape de sandbox a Lapy JB Daemon / OnionHEN / etaHEN
-    const auto jb_info = machete::jailbreak::request_jailbreak();
-    sys::log("[HUI] jailbreak: %s (daemon: %s, root: %d)",
-             jb_info.status_message.c_str(), jb_info.daemon_type.c_str(),
-             jb_info.root_access ? 1 : 0);
-
     sys::log("[HUI] storage dir=%d", save::ensure_directory(kDataRoot) ? 1 : 0);
 
     // The display opens at the saved resolution (1080p if that fails).
