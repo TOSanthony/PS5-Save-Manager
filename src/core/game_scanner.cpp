@@ -131,6 +131,73 @@ bool file_exists(const std::string &path)
     return access(path.c_str(), F_OK) == 0;
 }
 
+std::string sanitize_title(std::string text)
+{
+    if (text.empty())
+        return "";
+
+    std::string clean;
+    clean.reserve(text.size());
+    for (std::size_t i = 0; i < text.size(); ++i)
+    {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        if (c == '\\' && i + 1 < text.size())
+        {
+            const char next = text[i + 1];
+            if (next == '\"' || next == '\\' || next == '/')
+            {
+                clean.push_back(next);
+                ++i;
+                continue;
+            }
+            else if (next == 'n' || next == 'r' || next == 't')
+            {
+                clean.push_back(' ');
+                ++i;
+                continue;
+            }
+        }
+        if (c >= 32 && c != 127)
+        {
+            clean.push_back(static_cast<char>(c));
+        }
+        else if (c == '\t' || c == '\n' || c == '\r')
+        {
+            clean.push_back(' ');
+        }
+    }
+
+    std::string result;
+    result.reserve(clean.size());
+    bool in_space = false;
+    for (char c : clean)
+    {
+        if (c == ' ')
+        {
+            if (!in_space)
+            {
+                result.push_back(' ');
+                in_space = true;
+            }
+        }
+        else
+        {
+            result.push_back(c);
+            in_space = false;
+        }
+    }
+
+    while (!result.empty() && result.front() == ' ')
+        result.erase(result.begin());
+    while (!result.empty() && result.back() == ' ')
+        result.pop_back();
+
+    if (result.size() > 48)
+        result.resize(48);
+
+    return result;
+}
+
 } // namespace
 
 std::string extract_title_from_param_json(const std::string &param_path)
@@ -175,7 +242,7 @@ std::string extract_title_from_param_json(const std::string &param_path)
                     const std::size_t end = content.find('\"', start);
                     if (end != std::string::npos && end > start)
                     {
-                        return content.substr(start, end - start);
+                        return sanitize_title(content.substr(start, end - start));
                     }
                 }
             }
@@ -266,7 +333,7 @@ std::string extract_title_from_param_sfo(const std::string &sfo_path)
                     std::vector<char> val(entry.data_len + 1, 0);
                     std::fread(val.data(), 1, entry.data_len, f);
                     std::fclose(f);
-                    return std::string(val.data());
+                    return sanitize_title(std::string(val.data()));
                 }
             }
         }
@@ -501,6 +568,7 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
 
         if (has_saves || has_real_title || has_icon)
         {
+            game.title = sanitize_title(game.title);
             if (game.title.empty())
                 game.title = game.title_id;
             if (game.size_str.empty())
@@ -520,6 +588,12 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     });
 
     MACHETE_LOG("[SCANNER]", "Escaneo finalizado. Titulos validos detectados: %zu", valid_games.size());
+    for (std::size_t i = 0; i < std::min<std::size_t>(10, valid_games.size()); ++i)
+    {
+        const auto &g = valid_games[i];
+        MACHETE_LOG("[SCANNER]", "  [%zu] %s: '%s' (%s, %s)", i + 1,
+                    g.title_id.c_str(), g.title.c_str(), g.platform.c_str(), g.size_str.c_str());
+    }
     MACHETE_BREADCRUMB("scanner:done");
     return valid_games;
 }

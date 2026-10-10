@@ -830,11 +830,16 @@ class Machete final : public app::Concept
 
         const int visible_count = std::min(5, total_games);
 
+        MACHETE_BREADCRUMB("draw_dashboard: game_loop");
         for (int i = 0; i < visible_count; ++i)
         {
             const int game_idx = scroll_offset_ + i;
             if (game_idx >= total_games)
                 break;
+
+            char card_crumb[64];
+            std::snprintf(card_crumb, sizeof(card_crumb), "draw_dashboard: game_card %d", i);
+            MACHETE_BREADCRUMB(card_crumb);
 
             const auto &game = games_[static_cast<std::size_t>(game_idx)];
             const Rect r = kRects[kGame0 + i];
@@ -880,23 +885,28 @@ class Machete final : public app::Concept
                             gfx::Align::center);
             }
 
-            // Título oficial y metadatos
-            paint.heading(game.title.c_str(), r.x + 92, r.y + 44, 24,
+            // Título oficial y metadatos con salvaguarda
+            const std::string title_disp = !game.title.empty() ? game.title : game.title_id;
+            paint.heading(title_disp.c_str(), r.x + 92, r.y + 44, 24,
                           is_focused ? theme.text : theme.text.with_alpha(0.9f));
-            char sub[96];
-            std::snprintf(sub, sizeof(sub), "%s  -  %s  -  %s", game.platform.c_str(),
-                          game.title_id.c_str(), game.size_str.c_str());
+            char sub[128];
+            std::snprintf(sub, sizeof(sub), "%s  -  %s  -  %s",
+                          game.platform.empty() ? "PS5" : game.platform.c_str(),
+                          game.title_id.c_str(),
+                          game.size_str.empty() ? "Instalado" : game.size_str.c_str());
             paint.body(sub, r.x + 92, r.y + 70, 18, theme.text_muted);
         }
 
         // ==========================================
         // 3. PANEL DERECHO: DETALLES Y ACCIONES
         // ==========================================
+        MACHETE_BREADCRUMB("draw_dashboard: right_panel");
         const Rect right_panel{806, 210, 1018, 750};
         paint.panel(right_panel);
 
         if (!games_.empty())
         {
+            MACHETE_BREADCRUMB("draw_dashboard: right_panel_active");
             const std::size_t safe_idx = static_cast<std::size_t>(
                 std::clamp(selected_game_, 0, static_cast<int>(games_.size()) - 1));
             const auto &current_game = games_[safe_idx];
@@ -927,22 +937,24 @@ class Machete final : public app::Concept
             // Metadatos principales
             const Rect tag_rect{1058, 256, 110, 30};
             list.rounded_rect(tag_rect, 6.0f, Color::rgb(0x194582).with_alpha(0.7f));
-            paint.label(current_game.platform.c_str(), tag_rect.cx(), tag_rect.cy() + 6, 16,
+            paint.label(current_game.platform.empty() ? "PS5" : current_game.platform.c_str(),
+                        tag_rect.cx(), tag_rect.cy() + 6, 16,
                         Color::rgb(0x76d6ff), gfx::Align::center);
 
             paint.label(current_game.title_id.c_str(), 1184, 276, 18, theme.text_muted);
-            paint.heading(current_game.title.c_str(), 1058, 334, 38, theme.text);
+            const std::string current_title_disp = !current_game.title.empty() ? current_game.title : current_game.title_id;
+            paint.heading(current_title_disp.c_str(), 1058, 334, 38, theme.text);
 
-            char slot_info[80];
+            char slot_info[128];
             std::snprintf(slot_info, sizeof(slot_info),
                           machete::i18n::tr(machete::i18n::StringId::StatusPrefix),
-                          current_game.size_str.c_str());
+                          current_game.size_str.empty() ? "Instalado" : current_game.size_str.c_str());
             paint.body(slot_info, 1058, 372, 22, theme.text_muted);
 
-            char save_time[80];
+            char save_time[128];
             std::snprintf(save_time, sizeof(save_time),
                           machete::i18n::tr(machete::i18n::StringId::LastActivityPrefix),
-                          current_game.timestamp_str.c_str());
+                          current_game.timestamp_str.empty() ? "Listo para respaldar" : current_game.timestamp_str.c_str());
             paint.body(save_time, 1058, 404, 20, theme.primary);
 
             // Separador
