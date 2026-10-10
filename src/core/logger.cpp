@@ -1,0 +1,238 @@
+// MacheteSVG - Event Logging, Crash Diagnostics & Breadcrumb Tracing Implementation
+// Copyright (C) 2026 MacheteSVG Team
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#include "core/logger.hpp"
+
+#include <csignal>
+#include <cstdarg>
+#include <cstdio>
+#include <cstring>
+#include <ctime>
+#include <fcntl.h>
+#include <mutex>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+extern "C"
+{
+    int sceKernelDebugOutText(int channel, const char *text) __attribute__((weak));
+}
+
+namespace machete::log
+{
+
+namespace
+{
+
+constexpr const char *kPrimaryLogPath   = "/data/homebrew/PPSA99001/machete.log";
+constexpr const char *kSandboxLogPath   = "/download0/machete.log";
+constexpr const char *kDataLogPath      = "/data/machete.log";
+constexpr const char *kUserAppLogPath   = "/user/app/PPSA99001/machete.log";
+
+// Descriptores de archivo directos POSIX (seguros contra señales asíncronas)
+int s_fd_primary = -1;
+int s_fd_sandbox = -1;
+int s_fd_data    = -1;
+int s_fd_userapp = -1;
+
+std::mutex s_log_mutex;
+char s_current_breadcrumb[256] = "initialization";
+
+// Función de escritura asíncrona segura para manejador de señales
+void raw_signal_safe_write(int fd, const char *str)
+{
+    if (fd < 0 || !str)
+        return;
+    const std::size_t len = std::strlen(str);
+    const auto written = ::write(fd, str, len);
+    (void)written;
+    ::fsync(fd);
+}
+
+void try_open_fd(int &fd_ref, const char *path)
+{
+    if (fd_ref >= 0)
+        return;
+    fd_ref = open(path, O_WRONLY | O_CREAT | O_APPEND, 0666);
+}
+
+// Manejador de señales fatales (SIGSEGV, SIGBUS, etc.)
+void fatal_signal_handler(int sig, siginfo_t *info, void * /*ucontext*/)
+{
+    const char *sig_name = "UNKNOWN";
+    switch (sig)
+    {
+    case SIGSEGV: sig_name = "SIGSEGV (Segmentation Fault / Acceso de memoria invalido)"; break;
+    case SIGBUS:  sig_name = "SIGBUS (Bus Error / Alineacion no valida)"; break;
+    case SIGABRT: sig_name = "SIGABRT (Abort / Asercion fallida)"; break;
+    case SIGILL:  sig_name = "SIGILL (Instruccion Ilegal de CPU)"; break;
+    case SIGFPE:  sig_name = "SIGFPE (Excepcion de Punto Flotante / Division por Cero)"; break;
+    case SIGSYS:  sig_name = "SIGSYS (Llamada al Sistema No Soportada / Bad Syscall)"; break;
+    case SIGTRAP: sig_name = "SIGTRAP (Trampa de Depurador / Breakpoint)"; break;
+    }
+
+    char crash_msg[512];
+    std::snprintf(crash_msg, sizeof(crash_msg),
+                  "\n"
+                  "====================================================\n"
+                  "[FATAL CRASH DETECTED]\n"
+                  "Senal: %d - %s\n"
+                  "Direccion de memoria fallida: %p\n"
+                  "Codigo de senal (si_code): %d\n"
+                  "Ultima migaja registrada (Breadcrumb): [%s]\n"
+                  "PID: %d | UID: %d | GID: %d\n"
+                  "====================================================\n\n",
+                  sig, sig_name, info ? info->si_addr : nullptr, info ? info->si_code : 0,
+                  s_current_breadcrumb, static_cast<int>(getpid()),
+                  static_cast<int>(getuid()), static_cast<int>(getgid()));
+
+    // Escribir directamente sin bloqueos de mutex ni malloc (Async-Signal-Safe)
+    ::write(STDERR_FILENO, crash_msg, std::strlen(crash_msg));
+    raw_signal_safe_write(s_fd_primary, crash_msg);
+    raw_signal_safe_write(s_fd_sandbox, crash_msg);
+    raw_signal_safe_write(s_fd_data, crash_msg);
+    raw_signal_safe_write(s_fd_userapp, crash_msg);
+
+    if (sceKernelDebugOutText)
+        sceKernelDebugOutText(0, crash_msg);
+
+    // Breve pausa para asentar escrituras de disco en FreeBSD antes de finalizar
+    usleep(150000);
+    _exit(128 + sig);
+}
+
+} // namespace
+
+void init()
+{
+    // 1. Instalar manejadores de señales para captura forense de fallos
+    struct sigaction sa{};
+    sa.sa_sigaction = fatal_signal_handler;
+    sa.sa_flags = SA_SIGINFO | SA_NODEFER | SA_RESETHAND;
+    sigemptyset(&sa.sa_mask);
+
+    sigaction(SIGSEGV, &sa, nullptr);
+    sigaction(SIGBUS,  &sa, nullptr);
+    sigaction(SIGABRT, &sa, nullptr);
+    sigaction(SIGILL,  &sa, nullptr);
+    sigaction(SIGFPE,  &sa, nullptr);
+    sigaction(SIGSYS,  &sa, nullptr);
+    sigaction(SIGTRAP, &sa, nullptr);
+
+    // 2. Abrir rutas de registro disponibles
+    reopen_paths();
+
+    // 3. Encabezado de inicio de sesión
+    char time_str[64];
+    std::time_t now = std::time(nullptr);
+    std::tm *tm_info = std::localtime(&now);
+    if (tm_info)
+        std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+    else
+        std::snprintf(time_str, sizeof(time_str), "desconocida");
+
+    write("[SYSTEM]", "====================================================");
+    write("[SYSTEM]", "MacheteSVG v1.0.0 - Registro de Eventos y Diagnostico");
+    write("[SYSTEM]", "Fecha y Hora: %s", time_str);
+    write("[SYSTEM]", "PID: %d | UID: %d | EUID: %d | GID: %d",
+          static_cast<int>(getpid()), static_cast<int>(getuid()),
+          static_cast<int>(geteuid()), static_cast<int>(getgid()));
+    write("[SYSTEM]", "Archivos de log abiertos: primary=%d, sandbox=%d, data=%d, userapp=%d",
+          (s_fd_primary >= 0) ? 1 : 0, (s_fd_sandbox >= 0) ? 1 : 0,
+          (s_fd_data >= 0) ? 1 : 0, (s_fd_userapp >= 0) ? 1 : 0);
+    write("[SYSTEM]", "====================================================");
+}
+
+void set_breadcrumb(const char *step)
+{
+    if (!step)
+        return;
+    std::lock_guard<std::mutex> lock(s_log_mutex);
+    std::strncpy(s_current_breadcrumb, step, sizeof(s_current_breadcrumb) - 1);
+    s_current_breadcrumb[sizeof(s_current_breadcrumb) - 1] = '\0';
+
+    write("[BREADCRUMB]", "%s", step);
+}
+
+const char *get_breadcrumb()
+{
+    return s_current_breadcrumb;
+}
+
+void reopen_paths()
+{
+    std::lock_guard<std::mutex> lock(s_log_mutex);
+    try_open_fd(s_fd_sandbox, kSandboxLogPath);
+    try_open_fd(s_fd_primary, kPrimaryLogPath);
+    try_open_fd(s_fd_data,    kDataLogPath);
+    try_open_fd(s_fd_userapp, kUserAppLogPath);
+}
+
+void vwrite(const char *tag, const char *fmt, va_list args)
+{
+    char body[1024];
+    vsnprintf(body, sizeof(body), fmt, args);
+
+    char time_str[32];
+    std::time_t now = std::time(nullptr);
+    std::tm *tm_info = std::localtime(&now);
+    if (tm_info)
+        std::strftime(time_str, sizeof(time_str), "%H:%M:%S", tm_info);
+    else
+        std::snprintf(time_str, sizeof(time_str), "00:00:00");
+
+    char line[1280];
+    const int len = std::snprintf(line, sizeof(line), "[%s] %-12s %s\n",
+                                  time_str, tag ? tag : "[INFO]", body);
+    if (len <= 0)
+        return;
+
+    std::lock_guard<std::mutex> lock(s_log_mutex);
+
+    // Escribir en consola estándar (stdout)
+    std::fputs(line, stdout);
+    std::fflush(stdout);
+
+    // Enviar a la salida de depuración del kernel de PS5
+    if (sceKernelDebugOutText)
+        sceKernelDebugOutText(0, line);
+
+    // Escribir en todos los descriptores de archivo abiertos en disco
+    const auto write_and_sync = [](int fd, const char *text, std::size_t text_len)
+    {
+        if (fd >= 0)
+        {
+            auto w = ::write(fd, text, text_len);
+            (void)w;
+            ::fsync(fd);
+        }
+    };
+
+    write_and_sync(s_fd_primary, line, static_cast<std::size_t>(len));
+    write_and_sync(s_fd_sandbox, line, static_cast<std::size_t>(len));
+    write_and_sync(s_fd_data,    line, static_cast<std::size_t>(len));
+    write_and_sync(s_fd_userapp, line, static_cast<std::size_t>(len));
+}
+
+void write(const char *tag, const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    vwrite(tag, fmt, args);
+    va_end(args);
+}
+
+void flush()
+{
+    std::lock_guard<std::mutex> lock(s_log_mutex);
+    std::fflush(stdout);
+    std::fflush(stderr);
+    if (s_fd_primary >= 0) fsync(s_fd_primary);
+    if (s_fd_sandbox >= 0) fsync(s_fd_sandbox);
+    if (s_fd_data >= 0)    fsync(s_fd_data);
+    if (s_fd_userapp >= 0) fsync(s_fd_userapp);
+}
+
+} // namespace machete::log

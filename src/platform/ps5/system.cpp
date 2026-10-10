@@ -4,6 +4,8 @@
 
 #include "platform/ps5/system.hpp"
 
+#include "core/logger.hpp"
+
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -32,19 +34,10 @@ std::int64_t monotonic_us()
 
 void log(const char *format, ...)
 {
-    // klog lines are short; longer messages are truncated rather than split.
-    char line[384];
     va_list arguments;
     va_start(arguments, format);
-    int length = std::vsnprintf(line, sizeof(line) - 1, format, arguments);
+    machete::log::vwrite("[HUI]", format, arguments);
     va_end(arguments);
-    if (length < 0)
-        return;
-    std::size_t used = std::strlen(line);
-    line[used] = '\n';
-    line[used + 1] = '\0';
-    std::fputs(line, stdout);
-    sceKernelDebugOutText(0, line);
 }
 
 bool hide_splash_screen()

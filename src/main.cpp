@@ -14,6 +14,7 @@
 #include "core/frame_stats.hpp"
 #include "core/input.hpp"
 #include "core/jailbreak.hpp"
+#include "core/logger.hpp"
 #include "core/save_file.hpp"
 #include "core/settings.hpp"
 #include "core/version.hpp"
@@ -152,21 +153,28 @@ bool save_picture(const std::string &path, int width, int height)
 
 int main()
 {
+    ::machete::log::init();
+    MACHETE_BREADCRUMB("main entry point");
     using namespace hui;
     std::signal(SIGPIPE, SIG_IGN);
     sys::log("[HUI] entry");
 
+    MACHETE_BREADCRUMB("ensuring data storage directory");
     sys::log("[HUI] storage dir=%d", save::ensure_directory(kDataRoot) ? 1 : 0);
 
     // The display opens at the saved resolution (1080p if that fails).
+    MACHETE_BREADCRUMB("loading settings from storage");
     const Settings saved = app::Shell::load_settings(kDataRoot);
     int resolution = ps5::Display::supports_display_modes() ? saved.resolution : 0;
     ps5::Display display;
+    MACHETE_BREADCRUMB("opening display EGL / OpenGL");
     if (!open_display(display, &resolution))
     {
+        MACHETE_LOG("[FATAL]", "display open failed");
         sys::log("[HUI] fatal: display open failed");
         sys::park();
     }
+    MACHETE_BREADCRUMB("display opened successfully");
 
     gfx::Renderer renderer;
     gfx::Font regular;
@@ -176,6 +184,7 @@ int main()
     gfx::Font pixel;
     gfx::Font hand;
     ui::Fonts fonts;
+    MACHETE_BREADCRUMB("initializing renderer and loading SDF fonts");
     if (!renderer.init() ||
         !load_font(renderer, "inter-regular.huifont", &regular, &fonts.regular) ||
         !load_font(renderer, "inter-semibold.huifont", &semibold, &fonts.semibold) ||
@@ -184,29 +193,37 @@ int main()
         !load_font(renderer, "press-start-2p.huifont", &pixel, &fonts.pixel) ||
         !load_font(renderer, "patrick-hand.huifont", &hand, &fonts.hand))
     {
+        MACHETE_LOG("[FATAL]", "renderer or font initialization failed");
         sys::log("[HUI] fatal: renderer init failed");
         sys::park();
     }
+    MACHETE_BREADCRUMB("renderer and fonts initialized successfully");
     demo::Catalog catalog;
 
+    MACHETE_BREADCRUMB("opening DualSense pad");
     ps5::Pad pad;
     pad.open();
     InputTracker tracker;
     audio::Mixer mixer;
     // The music stream attaches to the mixer before the audio thread starts.
     audio::MusicPlayer music;
+    MACHETE_BREADCRUMB("initializing audio music stream");
     const int tracks = music.init(mixer, std::string(kAssets) + "/audio/music",
                                   static_cast<std::uint64_t>(sys::monotonic_us()));
     sys::log("[HUI] music songs=%d", tracks);
+    MACHETE_BREADCRUMB("starting audio out thread");
     ps5::AudioOut audio_out;
     audio_out.start(mixer);
+    MACHETE_BREADCRUMB("loading SFX soundbank");
     audio::SoundBank sounds;
     const auto bank = sounds.load(std::string(kAssets) + "/audio/sfx");
     sys::log("[HUI] sounds files=%d rejected=%d", bank.files, bank.rejected);
     for (const std::string &error : bank.errors)
         sys::log("[HUI] sound rejected %s", error.c_str());
 
+    MACHETE_BREADCRUMB("constructing app::Shell and concept screens");
     app::Shell shell(fonts, catalog, kDataRoot, renderer.glass_texture());
+    MACHETE_BREADCRUMB("app::Shell constructed successfully");
     const std::string version = read_content_version("/app0/sce_sys/param.json");
     shell.set_version(version);
     sys::log("[HUI] version %s designs=%zu", version.empty() ? "unknown" : version.c_str(),
@@ -262,6 +279,11 @@ int main()
     std::int64_t last_frame_start = sys::monotonic_us();
     for (;;)
     {
+        if (frames == 0)
+            MACHETE_BREADCRUMB("main loop: starting frame 0");
+        else if (frames == 1)
+            MACHETE_BREADCRUMB("main loop: starting frame 1");
+
         const std::int64_t now = sys::monotonic_us();
         // Animation time is start-to-start (one full frame), not the gap
         // between the previous swap returning and this frame beginning.
@@ -275,7 +297,11 @@ int main()
         if (tour)
             input = tour->step(dt);
 
+        if (frames == 0)
+            MACHETE_BREADCRUMB("frame 0: shell.update");
         shell.update(input, dt);
+        if (frames == 0)
+            MACHETE_BREADCRUMB("frame 0: shell.update completed");
         if (shell.take_settings_changed())
         {
             const Settings &settings = shell.settings();
@@ -306,11 +332,19 @@ int main()
         }
         music.pump(dt);
 
+        if (frames == 0)
+            MACHETE_BREADCRUMB("frame 0: shell.compose");
         shell.compose(renderer);
+        if (frames == 0)
+            MACHETE_BREADCRUMB("frame 0: shell.compose completed");
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        if (frames == 0)
+            MACHETE_BREADCRUMB("frame 0: renderer.present");
         renderer.present(0, display.width(), display.height());
+        if (frames == 0)
+            MACHETE_BREADCRUMB("frame 0: renderer.present completed");
         if (tour && !tour->capture().empty())
         {
             // The picture is the same frame drawn once more into a small
@@ -330,13 +364,20 @@ int main()
             tour->capture_done();
             last_frame_start = sys::monotonic_us(); // saving is slow; the frame was not
         }
+        if (frames == 0)
+            MACHETE_BREADCRUMB("frame 0: display.swap");
         if (!display.swap())
         {
+            MACHETE_LOG("[FATAL]", "display.swap failed on frame %llu: %s",
+                        static_cast<unsigned long long>(frames),
+                        ps5::egl_error_name(display.last_error()));
             sys::log("[HUI] fatal: swap failed frame=%llu error=%s",
                      static_cast<unsigned long long>(frames),
                      ps5::egl_error_name(display.last_error()));
             sys::park();
         }
+        if (frames == 0)
+            MACHETE_BREADCRUMB("frame 0: display.swap completed");
         ++frames;
         const std::int64_t presented = sys::monotonic_us();
         const float frame_ms = static_cast<float>(presented - previous) / 1000.0f;

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "core/game_scanner.hpp"
+#include "core/logger.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -277,6 +278,9 @@ std::string extract_title_from_param_sfo(const std::string &sfo_path)
 
 std::vector<ScannedGame> scan_installed_games_and_saves()
 {
+    MACHETE_BREADCRUMB("scanner:start");
+    MACHETE_LOG("[SCANNER]", "Iniciando escaneo de titulos y partidas instaladas...");
+
     std::vector<ScannedGame> games;
     std::unordered_map<std::string, std::time_t> latest_mtimes;
 
@@ -305,6 +309,7 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     //    /user/appmeta/ (interno) y /mnt/ext0/user/appmeta / /mnt/ext1/user/appmeta (externo)
     //    NOTA CRITICA: NUNCA escanear /user/app (punto de montaje PFS de contenedores cifrados)
     // =========================================================================
+    MACHETE_BREADCRUMB("scanner:appmeta");
     const char *meta_bases[] = {
         "/user/appmeta",
         "/mnt/ext0/user/appmeta",
@@ -387,6 +392,7 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     //    - PS4: /user/home/*/savedata/
     //    - Copias: /user/home/*/savedata_backup/
     // =========================================================================
+    MACHETE_BREADCRUMB("scanner:savedata");
     DIR *home_dir = opendir("/user/home");
     if (home_dir)
     {
@@ -484,6 +490,7 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     // =========================================================================
     // 3. Filtrar entradas fantasma (sin partidas guardadas Y sin metadatos reales)
     // =========================================================================
+    MACHETE_BREADCRUMB("scanner:filter");
     std::vector<ScannedGame> valid_games;
     valid_games.reserve(games.size());
     for (auto &game : games)
@@ -505,12 +512,15 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     }
 
     // Ordenar: primero aquellos con partidas guardadas (bytes > 0), luego por titulo
+    MACHETE_BREADCRUMB("scanner:sort");
     std::sort(valid_games.begin(), valid_games.end(), [](const ScannedGame &a, const ScannedGame &b) {
         if ((a.total_bytes > 0) != (b.total_bytes > 0))
             return a.total_bytes > b.total_bytes;
         return a.title < b.title;
     });
 
+    MACHETE_LOG("[SCANNER]", "Escaneo finalizado. Titulos validos detectados: %zu", valid_games.size());
+    MACHETE_BREADCRUMB("scanner:done");
     return valid_games;
 }
 

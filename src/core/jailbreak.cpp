@@ -5,6 +5,7 @@
 #include "core/jailbreak.hpp"
 #include "core/embedded_daemon.hpp"
 #include "core/i18n.hpp"
+#include "core/logger.hpp"
 
 #include <array>
 #include <chrono>
@@ -123,6 +124,10 @@ bool publish_atomic_request(const char *target_path, int pid) noexcept
 
 void clean_shadowmount_interference() noexcept
 {
+    // Reabrir archivos de log ahora que contamos con permisos root fuera del sandbox
+    ::machete::log::reopen_paths();
+    MACHETE_BREADCRUMB("clean_shadowmount_interference: checking whitelists");
+
     // Limpiar de forma segura cualquier rastro de PPSA99001 en listas blancas de etaHEN y ShadowMountPlus.
     // Las listas blancas activan el auto-pausado de Kstuff (kstuff_game_auto_toggle=1), lo cual detiene
     // la ejecucion de homebrews y provoca el error "Se cerro la app antes de que se pausara kstuff".
@@ -163,6 +168,7 @@ void clean_shadowmount_interference() noexcept
                     std::fputs(l.c_str(), out);
                 std::fclose(out);
                 (void)chmod(path, 0666);
+                MACHETE_LOG("[JAILBREAK]", "purged PPSA99001 from %s", path);
             }
         }
     }
@@ -307,12 +313,14 @@ JailbreakInfo check_status()
 
 JailbreakInfo request_jailbreak()
 {
+    MACHETE_BREADCRUMB("request_jailbreak: entry");
     const int pid = static_cast<int>(getpid());
     const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
 
     // 1. Verificación preliminar rápida: si ya tenemos acceso root, retornar de inmediato
     if (verify_root_access(pid))
     {
+        MACHETE_BREADCRUMB("request_jailbreak: root verified immediately");
         clean_shadowmount_interference();
         JailbreakInfo info;
         info.pid = pid;
@@ -321,6 +329,7 @@ JailbreakInfo request_jailbreak()
         info.daemon_type = "Lapy JB Daemon / OnionHEN / etaHEN";
         info.status_message =
             is_es ? "Privilegios Root Confirmados" : "Root Privileges Confirmed";
+        MACHETE_LOG("[JAILBREAK]", "root privileges already present (immediate return)");
         return info;
     }
 
@@ -330,11 +339,13 @@ JailbreakInfo request_jailbreak()
     // 2. Publicar solicitudes atómicas para demonios residentes:
     // - /download0/etahen_jailbreak (ArkSama Lapy JB Daemon, OnionHEN, etaHEN)
     // - /download0/elevate_proc (ProsperoStore / Lapy-JB-Daemon de mpereiraesaa)
+    MACHETE_BREADCRUMB("request_jailbreak: publishing requests in download0");
     publish_atomic_request(kEtahenJailbreakPath, pid);
     publish_atomic_request(kElevateProcPath, pid);
     info.status = JailbreakStatus::Requested;
 
     // 3. Sondeo para demonio residente activo (hasta 500ms en pasos de 50ms)
+    MACHETE_BREADCRUMB("request_jailbreak: polling resident daemon");
     bool resident_claimed = false;
     for (int i = 0; i < 10; ++i)
     {
@@ -342,6 +353,7 @@ JailbreakInfo request_jailbreak()
 
         if (verify_root_access(pid))
         {
+            MACHETE_BREADCRUMB("request_jailbreak: elevated by resident daemon");
             clean_shadowmount_interference();
             info.status = JailbreakStatus::Escaped;
             info.root_access = true;
@@ -352,6 +364,7 @@ JailbreakInfo request_jailbreak()
             (void)unlink(kEtahenJailbreakPath);
             (void)unlink(kElevateProcPath);
             (void)unlink(kLapyResultPath);
+            MACHETE_LOG("[JAILBREAK]", "resident daemon granted root successfully");
             return info;
         }
 

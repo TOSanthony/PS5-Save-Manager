@@ -46,6 +46,11 @@ Built with a hardware-accelerated OpenGL 4.6 SDF renderer, MacheteSVG delivers a
 - **Automatic Language Detection:** Console language is detected at launch. Spanish consoles initialize in Spanish, while English and all other languages default to English.
 - **On-the-Fly Toggle:** Press **L3** at any moment to switch instantly between English and Spanish.
 
+#### 5. Persistent Event Logging & Crash Diagnostics Engine
+- **Multi-Destination Real-Time Logging:** Writes execution traces and subsystem state directly to disk at `/data/homebrew/PPSA99001/machete.log`, `/download0/machete.log` (accessible within sandbox), `/data/machete.log`, and `/user/app/PPSA99001/machete.log`.
+- **Async-Signal-Safe Crash Catcher:** Intercepts fatal signals (`SIGSEGV`, `SIGBUS`, `SIGABRT`, `SIGILL`, `SIGFPE`, `SIGSYS`, `SIGTRAP`) with fault memory addresses, signal codes, and execution breadcrumbs, flushing them immediately with raw POSIX syscalls (`write`, `fsync`) without heap allocations or mutex deadlocks.
+- **Root Elevation Re-open:** Automatically establishes disk logging descriptors into `/data/homebrew/PPSA99001/` immediately upon sandbox escape.
+
 ---
 
 ### Controls Summary
@@ -62,7 +67,7 @@ Built with a hardware-accelerated OpenGL 4.6 SDF renderer, MacheteSVG delivers a
 
 | File | Size | SHA-256 Checksum |
 | :--- | :--- | :--- |
-| `MacheteSVG_v1.0.0_PS5.zip` | 29.4 MB (30,875,360 bytes) | `0a764650748902e2330a8dba0c3f05f3a0a0db68cd66ab935236e1a3450c6e64` |
+| `MacheteSVG_v1.0.0_PS5.zip` | 29.4 MB (30,879,733 bytes) | `3e456b1bde5580a2086ad21761be2cb579814da7a8d436fc9f5c1d3248263c32` |
 
 All package files are validated with open-mode permissions (`0777`) for out-of-the-box execution on jailbroken PlayStation 5 systems.
 
@@ -119,6 +124,11 @@ Desarrollado con renderizado acelerado por hardware OpenGL 4.6 SDF, MacheteSVG o
 - **Detección Automática de Idioma:** Detecta el idioma del sistema al iniciar. Las consolas en español abren en español; las consolas en inglés u otros idiomas abren en inglés.
 - **Cambio Inmediato:** Presiona **L3** en cualquier momento para alternar al instante entre inglés y español.
 
+#### 5. Motor de Registro Persistente de Eventos y Diagnóstico Forense de Fallos
+- **Registro en Múltiples Destinos en Tiempo Real:** Escribe trazas de ejecución y estado de los subsistemas directamente en disco en `/data/homebrew/PPSA99001/machete.log`, `/download0/machete.log` (accesible dentro del sandbox), `/data/machete.log` y `/user/app/PPSA99001/machete.log`.
+- **Captura Forense Inmune a Bloqueos (Async-Signal-Safe):** Intercepta señales fatales (`SIGSEGV`, `SIGBUS`, `SIGABRT`, `SIGILL`, `SIGFPE`, `SIGSYS`, `SIGTRAP`) registrando la dirección de memoria fallida, código de señal y última migaja de ejecución (breadcrumb), volcándolos al disco inmediatamente con llamadas de bajo nivel POSIX (`write`, `fsync`) sin usar asignaciones dinámicas ni mutexes que provoquen bloqueos mutuos.
+- **Reapertura al Salir del Sandbox:** Tras el escape del sandbox y la elevación a root, reabre automáticamente los descriptores hacia `/data/homebrew/PPSA99001/` para garantizar persistencia absoluta.
+
 ---
 
 ### Resumen de Controles
@@ -135,7 +145,7 @@ Desarrollado con renderizado acelerado por hardware OpenGL 4.6 SDF, MacheteSVG o
 
 | Archivo | Tamaño | Suma de Verificación SHA-256 |
 | :--- | :--- | :--- |
-| `MacheteSVG_v1.0.0_PS5.zip` | 29.4 MB (30,875,640 bytes) | `ace1ff472b195e44032e2da81179c4b6f11ae9ef848c1cc601c556b61fa98e61` |
+| `MacheteSVG_v1.0.0_PS5.zip` | 29.4 MB (30,879,733 bytes) | `3e456b1bde5580a2086ad21761be2cb579814da7a8d436fc9f5c1d3248263c32` |
 
 Todos los archivos han sido generados y verificados con permisos de modo abierto (`0777`) para ejecución inmediata en consolas PlayStation 5.
 

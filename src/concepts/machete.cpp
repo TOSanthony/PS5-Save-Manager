@@ -9,6 +9,7 @@
 #include "core/game_scanner.hpp"
 #include "core/i18n.hpp"
 #include "core/jailbreak.hpp"
+#include "core/logger.hpp"
 #include "core/save_manager.hpp"
 #include "core/storage.hpp"
 #include "core/tween.hpp"
@@ -119,6 +120,7 @@ class Machete final : public app::Concept
 
     void start_async_jailbreak()
     {
+        MACHETE_BREADCRUMB("start_async_jailbreak requested");
         if (jb_thread_running_.exchange(true))
             return;
 
@@ -126,6 +128,7 @@ class Machete final : public app::Concept
             jb_thread_.join();
 
         jb_thread_ = std::thread([this]() {
+            MACHETE_BREADCRUMB("jb_thread running request_jailbreak");
             const auto result = machete::jailbreak::request_jailbreak();
             {
                 std::lock_guard<std::mutex> lock(jb_mutex_);
@@ -133,8 +136,13 @@ class Machete final : public app::Concept
             }
             if (result.root_access)
             {
+                MACHETE_BREADCRUMB("jb_thread: root access granted");
                 root_active_.store(true);
                 jb_needs_refresh_.store(true);
+            }
+            else
+            {
+                MACHETE_BREADCRUMB("jb_thread: elevation not completed yet");
             }
             jb_thread_running_.store(false);
         });
@@ -142,6 +150,7 @@ class Machete final : public app::Concept
 
     void enter() override
     {
+        MACHETE_BREADCRUMB("MacheteConcept::enter start");
         age_ = 0.0f;
         dialog_ = false;
         drive_dialog_ = false;
@@ -150,30 +159,39 @@ class Machete final : public app::Concept
         jb_poll_timer_ = 0.0f;
 
         // 1. Verificación instantánea sin bloqueo (< 1ms)
+        MACHETE_BREADCRUMB("MacheteConcept::enter: check_status");
         jb_info_ = machete::jailbreak::check_status();
         root_active_.store(jb_info_.root_access);
         if (jb_info_.root_access)
         {
+            MACHETE_BREADCRUMB("MacheteConcept::enter: cleaning shadowmount");
             machete::jailbreak::clean_shadowmount_interference();
         }
 
         // 2. Escaneo de dispositivos de almacenamiento
+        MACHETE_BREADCRUMB("MacheteConcept::enter: scan_storage_devices");
         active_devices_ = machete::storage::scan_storage_devices();
 
         // 3. Escaneo dinámico de juegos y partidas
+        MACHETE_BREADCRUMB("MacheteConcept::enter: initial refresh_games");
         refresh_games();
 
         // 4. Si aún no tenemos privilegios root, lanzar elevación en segundo plano
         if (!root_active_.load())
         {
+            MACHETE_BREADCRUMB("MacheteConcept::enter: launching async jailbreak");
             start_async_jailbreak();
         }
+        MACHETE_BREADCRUMB("MacheteConcept::enter finished");
     }
 
     void refresh_games()
     {
+        MACHETE_BREADCRUMB("refresh_games: start");
         machete::scanner::release_game_icon_textures(games_);
+        MACHETE_BREADCRUMB("refresh_games: scan_installed_games_and_saves");
         games_ = machete::scanner::scan_installed_games_and_saves();
+        MACHETE_BREADCRUMB("refresh_games: load_game_icon_textures");
         machete::scanner::load_game_icon_textures(games_);
 
         if (games_.empty())
@@ -186,6 +204,8 @@ class Machete final : public app::Concept
             selected_game_ = std::clamp(selected_game_, 0, static_cast<int>(games_.size()) - 1);
             adjust_scroll();
         }
+        MACHETE_LOG("[SCANNER]", "scan completed with %zu games detected", games_.size());
+        MACHETE_BREADCRUMB("refresh_games: completed");
     }
 
     void update(const InputFrame &input, float dt, app::Feedback &feedback) override
