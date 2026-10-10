@@ -3,7 +3,7 @@
 ![MacheteSVG Banner](docs/screenshots/banner.png)
 
 [![Platform](https://img.shields.io/badge/Platform-PlayStation_5-blue.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager)
-[![Firmware](https://img.shields.io/badge/Firmware-1.00--4.51-blueviolet.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager)
+[![Firmware](https://img.shields.io/badge/Firmware-All_Jailbroken_Firmwares-blueviolet.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager)
 [![Title ID](https://img.shields.io/badge/Title_ID-PPSA99001-informational.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager)
 [![License](https://img.shields.io/badge/License-GPL_v3.0-green.svg)](LICENSE)
 [![Release](https://img.shields.io/badge/Release-v1.0.0-orange.svg)](https://github.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/releases/tag/v1.0.0)
