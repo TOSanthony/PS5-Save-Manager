@@ -135,7 +135,7 @@ Desarrollado con renderizado acelerado por hardware OpenGL 4.6 SDF, MacheteSVG o
 
 | Archivo | Tamaño | Suma de Verificación SHA-256 |
 | :--- | :--- | :--- |
-| `MacheteSVG_v1.0.0_PS5.zip` | 29.4 MB (30,875,360 bytes) | `0a764650748902e2330a8dba0c3f05f3a0a0db68cd66ab935236e1a3450c6e64` |
+| `MacheteSVG_v1.0.0_PS5.zip` | 29.4 MB (30,875,640 bytes) | `ace1ff472b195e44032e2da81179c4b6f11ae9ef848c1cc601c556b61fa98e61` |
 
 Todos los archivos han sido generados y verificados con permisos de modo abierto (`0777`) para ejecución inmediata en consolas PlayStation 5.
 

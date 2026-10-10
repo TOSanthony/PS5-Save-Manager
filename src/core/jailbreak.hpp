@@ -41,6 +41,10 @@ JailbreakInfo check_status();
 // idéntico a la arquitectura autónoma de ProsperoStore / Homebrew Store.
 bool auto_launch_embedded_daemon();
 
+// Limpia de forma activa PPSA99001 de listas blancas y configuraciones de ShadowMount / etaHEN
+// para evitar que el payload intente pausar KStuff y cerrar la aplicación homebrew.
+void clean_shadowmount_interference() noexcept;
+
 // Devuelve una cadena descriptiva para mostrar en la interfaz gráfica
 const char *status_to_string(JailbreakStatus status);
 

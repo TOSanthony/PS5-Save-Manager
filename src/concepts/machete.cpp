@@ -152,6 +152,10 @@ class Machete final : public app::Concept
         // 1. Verificación instantánea sin bloqueo (< 1ms)
         jb_info_ = machete::jailbreak::check_status();
         root_active_.store(jb_info_.root_access);
+        if (jb_info_.root_access)
+        {
+            machete::jailbreak::clean_shadowmount_interference();
+        }
 
         // 2. Escaneo de dispositivos de almacenamiento
         active_devices_ = machete::storage::scan_storage_devices();
@@ -209,6 +213,7 @@ class Machete final : public app::Concept
         // Notificación de elevación de privilegios completada en segundo plano
         if (jb_needs_refresh_.exchange(false))
         {
+            machete::jailbreak::clean_shadowmount_interference();
             refresh_games();
             const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
             std::snprintf(notification_text_, sizeof(notification_text_), "%s",
@@ -845,7 +850,8 @@ class Machete final : public app::Concept
                 list.rounded_rect(icon_rect, 8.0f, Color::rgb(0x142b4d).with_alpha(0.85f));
                 paint.stroke(icon_rect, 8.0f, 1.0f, Color::rgb(0x76d6ff).with_alpha(0.3f));
                 char init[4] = "PS";
-                if (!game.title.empty())
+                if (!game.title.empty() && static_cast<unsigned char>(game.title[0]) >= 32 &&
+                    static_cast<unsigned char>(game.title[0]) <= 126)
                 {
                     init[0] = game.title[0];
                     init[1] = '\0';
@@ -871,7 +877,9 @@ class Machete final : public app::Concept
 
         if (!games_.empty())
         {
-            const auto &current_game = games_[static_cast<std::size_t>(selected_game_)];
+            const std::size_t safe_idx = static_cast<std::size_t>(
+                std::clamp(selected_game_, 0, static_cast<int>(games_.size()) - 1));
+            const auto &current_game = games_[safe_idx];
 
             // Carátula / Icono grande (196x196)
             const Rect big_cover{836, 256, 196, 196};
@@ -886,7 +894,8 @@ class Machete final : public app::Concept
                 list.rounded_rect(big_cover, 14.0f, Color::rgb(0x142b4d).with_alpha(0.85f));
                 paint.stroke(big_cover, 14.0f, 2.0f, Color::rgb(0x76d6ff).with_alpha(0.4f));
                 char init[4] = "PS";
-                if (!current_game.title.empty())
+                if (!current_game.title.empty() && static_cast<unsigned char>(current_game.title[0]) >= 32 &&
+                    static_cast<unsigned char>(current_game.title[0]) <= 126)
                 {
                     init[0] = current_game.title[0];
                     init[1] = '\0';

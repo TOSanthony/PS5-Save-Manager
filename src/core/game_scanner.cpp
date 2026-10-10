@@ -496,6 +496,10 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
         {
             if (game.title.empty())
                 game.title = game.title_id;
+            if (game.size_str.empty())
+                game.size_str = (game.total_bytes > 0) ? format_bytes(game.total_bytes) : "Partida detectada";
+            if (game.timestamp_str.empty())
+                game.timestamp_str = "Listo para respaldar";
             valid_games.push_back(std::move(game));
         }
     }

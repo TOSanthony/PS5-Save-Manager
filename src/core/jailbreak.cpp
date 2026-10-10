@@ -119,45 +119,54 @@ bool publish_atomic_request(const char *target_path, int pid) noexcept
     return ok;
 }
 
-void ensure_etahen_whitelist() noexcept
+} // namespace
+
+void clean_shadowmount_interference() noexcept
 {
-    // Asegurar Title ID en archivos de lista blanca leídos por etaHEN
+    // Limpiar de forma segura cualquier rastro de PPSA99001 en listas blancas de etaHEN y ShadowMountPlus.
+    // Las listas blancas activan el auto-pausado de Kstuff (kstuff_game_auto_toggle=1), lo cual detiene
+    // la ejecucion de homebrews y provoca el error "Se cerro la app antes de que se pausara kstuff".
     const char *whitelist_files[] = {
         "/data/whitelist.txt",
         "/data/etaHEN/whitelist.txt",
+        "/data/shadowmount/autotune.ini",
+        "/data/shadowmount/config.ini",
     };
 
     for (const char *path : whitelist_files)
     {
-        bool found = false;
         std::FILE *f = std::fopen(path, "r");
-        if (f)
+        if (!f)
+            continue;
+
+        std::vector<std::string> clean_lines;
+        char line[512];
+        bool modified = false;
+
+        while (std::fgets(line, sizeof(line), f))
         {
-            char line[128];
-            while (std::fgets(line, sizeof(line), f))
+            if (std::strstr(line, "PPSA99001") != nullptr)
             {
-                if (std::strstr(line, "PPSA99001") != nullptr)
-                {
-                    found = true;
-                    break;
-                }
+                modified = true;
+                continue;
             }
-            std::fclose(f);
+            clean_lines.push_back(line);
         }
-        if (!found)
+        std::fclose(f);
+
+        if (modified)
         {
-            std::FILE *out = std::fopen(path, "a");
+            std::FILE *out = std::fopen(path, "w");
             if (out)
             {
-                std::fputs("PPSA99001\n", out);
+                for (const auto &l : clean_lines)
+                    std::fputs(l.c_str(), out);
                 std::fclose(out);
                 (void)chmod(path, 0666);
             }
         }
     }
 }
-
-} // namespace
 
 bool auto_launch_embedded_daemon()
 {
@@ -279,6 +288,7 @@ JailbreakInfo check_status()
     const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
     if (info.root_access)
     {
+        clean_shadowmount_interference();
         info.status = JailbreakStatus::Escaped;
         info.daemon_type = "Lapy JB Daemon / OnionHEN / etaHEN";
         info.status_message =
@@ -303,7 +313,7 @@ JailbreakInfo request_jailbreak()
     // 1. Verificación preliminar rápida: si ya tenemos acceso root, retornar de inmediato
     if (verify_root_access(pid))
     {
-        ensure_etahen_whitelist();
+        clean_shadowmount_interference();
         JailbreakInfo info;
         info.pid = pid;
         info.status = JailbreakStatus::Escaped;
@@ -332,7 +342,7 @@ JailbreakInfo request_jailbreak()
 
         if (verify_root_access(pid))
         {
-            ensure_etahen_whitelist();
+            clean_shadowmount_interference();
             info.status = JailbreakStatus::Escaped;
             info.root_access = true;
             info.daemon_type = "Lapy JB Daemon / OnionHEN / etaHEN (Residente)";
@@ -363,7 +373,7 @@ JailbreakInfo request_jailbreak()
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             if (verify_root_access(pid))
             {
-                ensure_etahen_whitelist();
+                clean_shadowmount_interference();
                 info.status = JailbreakStatus::Escaped;
                 info.root_access = true;
                 info.daemon_type = "Lapy JB Daemon / etaHEN";
@@ -400,7 +410,7 @@ JailbreakInfo request_jailbreak()
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             if (verify_root_access(pid))
             {
-                ensure_etahen_whitelist();
+                clean_shadowmount_interference();
                 info.status = JailbreakStatus::Escaped;
                 info.root_access = true;
                 info.status_message =
@@ -421,7 +431,7 @@ JailbreakInfo request_jailbreak()
 
     if (verify_root_access(pid))
     {
-        ensure_etahen_whitelist();
+        clean_shadowmount_interference();
         info.status = JailbreakStatus::Escaped;
         info.root_access = true;
         info.status_message =
