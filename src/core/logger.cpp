@@ -18,6 +18,8 @@
 extern "C"
 {
     int sceKernelDebugOutText(int channel, const char *text) __attribute__((weak));
+    int sceKernelUsleep(unsigned int microseconds) __attribute__((weak));
+    int sceSystemServiceLoadExec(const char *path, const char **arguments) __attribute__((weak));
 }
 
 namespace machete::log
@@ -37,7 +39,7 @@ int s_fd_sandbox = -1;
 int s_fd_data    = -1;
 int s_fd_userapp = -1;
 
-std::mutex s_log_mutex;
+std::recursive_mutex s_log_mutex;
 char s_current_breadcrumb[256] = "initialization";
 
 // Función de escritura asíncrona segura para manejador de señales
@@ -99,7 +101,19 @@ void fatal_signal_handler(int sig, siginfo_t *info, void * /*ucontext*/)
         sceKernelDebugOutText(0, crash_msg);
 
     // Breve pausa para asentar escrituras de disco en FreeBSD antes de finalizar
-    usleep(150000);
+    if (sceKernelUsleep)
+        sceKernelUsleep(150000);
+
+    if (sceSystemServiceLoadExec)
+    {
+        sceSystemServiceLoadExec("exit", nullptr);
+        for (;;)
+        {
+            if (sceKernelUsleep)
+                sceKernelUsleep(100000);
+        }
+    }
+
     _exit(128 + sig);
 }
 
@@ -149,21 +163,24 @@ void set_breadcrumb(const char *step)
 {
     if (!step)
         return;
-    std::lock_guard<std::mutex> lock(s_log_mutex);
-    std::strncpy(s_current_breadcrumb, step, sizeof(s_current_breadcrumb) - 1);
-    s_current_breadcrumb[sizeof(s_current_breadcrumb) - 1] = '\0';
+    {
+        std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
+        std::strncpy(s_current_breadcrumb, step, sizeof(s_current_breadcrumb) - 1);
+        s_current_breadcrumb[sizeof(s_current_breadcrumb) - 1] = '\0';
+    }
 
     write("[BREADCRUMB]", "%s", step);
 }
 
 const char *get_breadcrumb()
 {
+    std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
     return s_current_breadcrumb;
 }
 
 void reopen_paths()
 {
-    std::lock_guard<std::mutex> lock(s_log_mutex);
+    std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
     try_open_fd(s_fd_sandbox, kSandboxLogPath);
     try_open_fd(s_fd_primary, kPrimaryLogPath);
     try_open_fd(s_fd_data,    kDataLogPath);
@@ -189,7 +206,7 @@ void vwrite(const char *tag, const char *fmt, va_list args)
     if (len <= 0)
         return;
 
-    std::lock_guard<std::mutex> lock(s_log_mutex);
+    std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
 
     // Escribir en consola estándar (stdout)
     std::fputs(line, stdout);
@@ -226,13 +243,13 @@ void write(const char *tag, const char *fmt, ...)
 
 void flush()
 {
-    std::lock_guard<std::mutex> lock(s_log_mutex);
+    std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
     std::fflush(stdout);
     std::fflush(stderr);
-    if (s_fd_primary >= 0) fsync(s_fd_primary);
-    if (s_fd_sandbox >= 0) fsync(s_fd_sandbox);
-    if (s_fd_data >= 0)    fsync(s_fd_data);
-    if (s_fd_userapp >= 0) fsync(s_fd_userapp);
+    if (s_fd_primary >= 0) ::fsync(s_fd_primary);
+    if (s_fd_sandbox >= 0) ::fsync(s_fd_sandbox);
+    if (s_fd_data >= 0)    ::fsync(s_fd_data);
+    if (s_fd_userapp >= 0) ::fsync(s_fd_userapp);
 }
 
 } // namespace machete::log
