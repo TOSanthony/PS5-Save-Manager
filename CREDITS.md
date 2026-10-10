@@ -22,18 +22,23 @@ MacheteSVG is built upon the collaborative spirit and pioneering achievements of
 * **Developers:** LightningMods, ChendoChap, Sleirsgoevy, Astrelsky, Illusion, and scene contributors.
 * **Contribution:** Development of HEN environments (etaHEN and OnionHEN) for PlayStation 5, `kstuff` kernel patches, on-demand jailbreak APIs, and system infrastructure enabling native homebrew on modern firmwares.
 
-### 5. ShadowMount Plus
-* **Contribution:** Techniques for mounting PFS and user partitions without Prospero vnode cache corruption, solving instant reload of both PS5 and backwards-compatible PS4 save data.
+### 5. ShadowMountPlus — Drakmor & VoidWhisper
+* **Project:** [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)
+* **Developers:** Drakmor (Lead developer of ShadowMountPlus) & VoidWhisper (Original ShadowMount creator)
+* **Contribution:** Groundbreaking automated filesystem and PFS mounting architecture for jailbroken PS5, and techniques for mounting PFS and user partitions without Prospero vnode cache corruption, enabling reliable access and instant reload of save data for both PS5 native titles and backwards-compatible PS4 games.
 
-### 6. ps5-payload-sdk — John Törnblom
+### 6. KSystemLib
+* **Contribution:** Low-level kernel interface and system library primitives for PlayStation 5 homebrew, facilitating robust syscall execution and system management within jailbroken Prospero environments.
+
+### 7. ps5-payload-sdk — John Törnblom
 * **Project:** [ps5-payload-sdk](https://github.com/ps5-payload-dev/pacbrew-packages)
 * **Contribution:** Native PlayStation 5 toolchain, `prospero-lld` linker, Prospero/FreeBSD header definitions, and cross-compilation environment.
 
-### 7. ps5-homebrew-ui — BlackBearReloaded
+### 8. ps5-homebrew-ui — BlackBearReloaded
 * **Project:** [ps5-homebrew-ui](https://github.com/BlackBearReloaded/ps5-homebrew-ui)
 * **Contribution:** Native OpenGL hardware-accelerated user interface framework for PlayStation 5, featuring 60 FPS rendering, spring kinematics, complete DualSense controller support, and modern Liquid Glass aesthetic.
 
-### 8. stb_image — Sean Barrett
+### 9. stb_image — Sean Barrett
 * **Project:** [stb](https://github.com/nothings/stb)
 * **Contribution:** Single-header C image library for zero-overhead decoding of PNG assets (`icon0.png`) to GPU textures.
 
@@ -57,18 +62,23 @@ MacheteSVG is built upon the collaborative spirit and pioneering achievements of
 * **Desarrolladores:** LightningMods, ChendoChap, Sleirsgoevy, Astrelsky, Illusion y colaboradores de la escena.
 * **Aportación:** Desarrollo de los entornos HEN (etaHEN y OnionHEN) para PlayStation 5, parches de kernel `kstuff`, APIs de jailbreak on-demand e infraestructura que hace posible la ejecución de homebrew nativo en firmwares modernos.
 
-### 5. ShadowMount Plus
-* **Aportación:** Herramienta y técnica de montaje de particiones PFS y datos de usuario sin corrupción de caché de vnodes en Prospero, resolviendo la recarga instantánea de partidas tanto de PS5 como de PS4 en retrocompatibilidad.
+### 5. ShadowMountPlus — Drakmor & VoidWhisper
+* **Proyecto:** [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)
+* **Desarrolladores:** Drakmor (Desarrollador principal de ShadowMountPlus) y VoidWhisper (Creador original de ShadowMount)
+* **Aportación:** Arquitectura pionera de montaje automatizado de sistemas de archivos y contenedores PFS en PS5 con jailbreak, junto con técnicas de montaje de particiones de usuario sin corrupción de caché de vnodes en Prospero, resolviendo el acceso fiable y la recarga instantánea de datos de guardado tanto de títulos nativos de PS5 como de PS4 en retrocompatibilidad.
 
-### 6. ps5-payload-sdk — John Törnblom
+### 6. KSystemLib
+* **Aportación:** Primitivas de biblioteca de sistema y llamadas de kernel de bajo nivel para aplicaciones homebrew en PlayStation 5, facilitando la ejecución segura de llamadas al sistema y la gestión en entornos Prospero con jailbreak.
+
+### 7. ps5-payload-sdk — John Törnblom
 * **Proyecto:** [ps5-payload-sdk](https://github.com/ps5-payload-dev/pacbrew-packages)
 * **Aportación:** Cadena de herramientas (toolchain) para PS5, enlazador `prospero-lld`, definiciones de cabeceras de Prospero/FreeBSD y entorno de compilación cruzada.
 
-### 7. ps5-homebrew-ui — BlackBearReloaded
+### 8. ps5-homebrew-ui — BlackBearReloaded
 * **Proyecto:** [ps5-homebrew-ui](https://github.com/BlackBearReloaded/ps5-homebrew-ui)
 * **Aportación:** Framework de interfaz gráfica nativo para PlayStation 5, renderizado acelerado por hardware OpenGL a 60 FPS, física de resortes (Spring physics), soporte completo para el mando DualSense y diseño moderno Liquid Glass.
 
-### 8. stb_image — Sean Barrett
+### 9. stb_image — Sean Barrett
 * **Proyecto:** [stb](https://github.com/nothings/stb)
 * **Aportación:** Biblioteca de cabecera única en C para decodificación eficiente y sin sobrecarga de imágenes PNG (`icon0.png`) a texturas GPU.
 

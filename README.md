@@ -192,4 +192,4 @@ make app && bash tools/package.sh
 ## Credits & License
 
 MacheteSVG is released under the **GNU General Public License v3.0 (GPL-3.0)**. See [LICENSE](LICENSE) for details.
-We thank the PlayStation homebrew community and pioneer projects: **Apollo Save Tool** (Bucanero), **PS5-Lapy-JB-Daemon** (ArkSama & Lapy), **ProsperoStore** (BlackBearReloaded), **ps5-payload-sdk** (John Törnblom), and the **etaHEN** team. Full attributions are listed in [CREDITS.md](CREDITS.md).
+We thank the PlayStation homebrew community and pioneer projects: **Apollo Save Tool** (Bucanero), **PS5-Lapy-JB-Daemon** (ArkSama & Lapy), **ProsperoStore** (BlackBearReloaded), **ShadowMountPlus** (Drakmor & VoidWhisper), **KSystemLib**, **ps5-payload-sdk** (John Törnblom), and the **etaHEN** team. Full attributions are listed in [CREDITS.md](CREDITS.md).

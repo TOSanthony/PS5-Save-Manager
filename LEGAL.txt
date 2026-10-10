@@ -34,6 +34,8 @@ Entertainment Inc., Google LLC, or any of their subsidiaries or affiliates.
 - ProsperoStore / ps5-homebrew-ui (Copyright (C) 2026 BlackBearReloaded) - GPL-3.0
 - Apollo Save Tool (Copyright (C) Bucanero) - GPL-3.0
 - PS5 Lapy JB Daemon (Copyright (C) ArkSama & Lapy)
+- ShadowMountPlus (Copyright (C) Drakmor & VoidWhisper) - GPL-3.0
+- KSystemLib
 - ps5-payload-sdk (Copyright (C) John Törnblom) - BSD-2-Clause
 - stb_image / stb_truetype (Copyright (C) Sean Barrett) - Public Domain / MIT
 - cJSON (Copyright (C) Dave Gamble) - MIT
@@ -68,6 +70,8 @@ Entertainment Inc., Google LLC ni ninguna de sus filiales.
 - ProsperoStore / ps5-homebrew-ui (Copyright (C) 2026 BlackBearReloaded) - GPL-3.0
 - Apollo Save Tool (Copyright (C) Bucanero) - GPL-3.0
 - PS5 Lapy JB Daemon (Copyright (C) ArkSama & Lapy)
+- ShadowMountPlus (Copyright (C) Drakmor y VoidWhisper) - GPL-3.0
+- KSystemLib
 - ps5-payload-sdk (Copyright (C) John Törnblom) - BSD-2-Clause
 - stb_image / stb_truetype (Copyright (C) Sean Barrett) - Public Domain / MIT
 - cJSON (Copyright (C) Dave Gamble) - MIT
