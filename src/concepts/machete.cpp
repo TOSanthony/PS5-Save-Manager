@@ -121,13 +121,13 @@ class Machete final : public app::Concept
         storage_poll_timer_ = 0.0f;
         jb_poll_timer_ = 0.0f;
 
-        // 1. Escaneo de dispositivos de almacenamiento
+        // 1. Solicitar elevación y escape del sandbox inmediatamente en el arranque
+        jb_info_ = machete::jailbreak::request_jailbreak();
+
+        // 2. Escaneo de dispositivos de almacenamiento
         active_devices_ = machete::storage::scan_storage_devices();
 
-        // 2. Estado de Jailbreak / Sandbox Escape
-        jb_info_ = machete::jailbreak::check_status();
-
-        // 3. Escaneo dinámico de juegos y carga de iconos reales icon0.png
+        // 3. Escaneo dinámico de juegos y partidas reales con privilegios
         refresh_games();
     }
 
@@ -198,14 +198,18 @@ class Machete final : public app::Concept
             switch_.start(context_.settings.reduced_motion ? 0.16f : 0.42f);
             feedback.play(audio::Cue::tab, 1.0f, 0.0f);
         }
-        // Atajo Triangle: Salto directo a Google Drive
+        // Atajo Triangle: Abrir / alternar sincronización con Google Drive directamente
         else if (input.is_pressed(Action::north))
         {
-            if (focus_ == kBtnCloudHeader)
-                move_to(kGame0 + (selected_game_ - scroll_offset_), feedback);
+            if (drive_dialog_)
+            {
+                drive_dialog_ = false;
+                feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
+            }
             else
-                move_to(kBtnCloudHeader, feedback);
-            feedback.play(audio::Cue::focus, 1.0f, 0.0f);
+            {
+                open_google_drive_dialog(feedback);
+            }
         }
         // Atajo Square: Recargar lista de juegos
         else if (input.is_pressed(Action::west))
@@ -728,6 +732,20 @@ class Machete final : public app::Concept
         paint.label(count_str, 736, 256, 18, theme.primary, gfx::Align::right);
 
         const int total_games = static_cast<int>(games_.size());
+        if (total_games == 0)
+        {
+            const Rect empty_box{126, 320, 620, 160};
+            list.rounded_rect(empty_box, theme.radius, Color::rgb(0xffffff).with_alpha(0.04f));
+            paint.stroke(empty_box, theme.radius, 1.0f, theme.outline);
+            const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+            paint.heading(is_es ? "No se detectaron juegos instalados"
+                                : "No installed games detected",
+                          empty_box.cx(), empty_box.cy() - 14, 24, theme.text, gfx::Align::center);
+            paint.body(is_es ? "Verifica permisos o presiona Cuadrado para reescanear"
+                             : "Verify permissions or press Square to re-scan",
+                       empty_box.cx(), empty_box.cy() + 18, 18, theme.text_muted, gfx::Align::center);
+        }
+
         const int visible_count = std::min(5, total_games);
 
         for (int i = 0; i < visible_count; ++i)
@@ -882,6 +900,35 @@ class Machete final : public app::Concept
             paint.button(kRects[kBtnCloud], machete::i18n::tr(machete::i18n::StringId::BtnCloudSync),
                          ui::ButtonKind::secondary, look(kBtnCloud));
         }
+        else
+        {
+            const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+            paint.heading(is_es ? "Estado de MacheteSVG y Almacenamiento" : "MacheteSVG System & Storage",
+                          856, 280, 32, theme.text);
+            paint.body(is_es ? "El gestor de partidas nativo para PS5 y PS4 esta listo para operar."
+                             : "Native save data manager for PS5 & PS4 is ready to operate.",
+                       856, 324, 20, theme.text_muted);
+
+            const char *guide_steps[] = {
+                is_es ? "1. Privilegios: Observa el chip superior (Root / Sandbox)."
+                      : "1. Privileges: Check upper badge (Root / Sandbox).",
+                is_es ? "2. Deteccion: Con permisos root, lee automaticamente /user/home y /user/app."
+                      : "2. Detection: With root privileges, scans /user/home and /user/app automatically.",
+                is_es ? "3. Pendrive USB: Conecta un dispositivo exFAT para respaldos portables."
+                      : "3. USB Drive: Connect an exFAT device for portable offline backups.",
+                is_es ? "4. Google Drive: Presiona Triangulo para sincronizacion en la nube."
+                      : "4. Google Drive: Press Triangle for cloud synchronization.",
+                is_es ? "5. Reescanear: Presiona Cuadrado para refrescar los juegos y partidas."
+                      : "5. Refresh: Press Square to re-scan games and save data.",
+            };
+            for (int s = 0; s < 5; ++s)
+            {
+                const Rect sr{856, 370.0f + static_cast<float>(s) * 56.0f, 918, 46};
+                list.rounded_rect(sr, 8.0f, Color::rgb(0xffffff).with_alpha(0.04f));
+                list.circle(sr.x + 20, sr.cy(), 5.0f, theme.primary);
+                paint.body(guide_steps[s], sr.x + 36, sr.cy() + 6, 18, theme.text);
+            }
+        }
 
         // Toast de notificación
         if (notification_timer_ > 0.0f)
@@ -939,12 +986,23 @@ class Machete final : public app::Concept
                 paint.heading(ucode.c_str(), code_box.cx(), code_box.cy() + 14, 38,
                               Color::rgb(0x38ef7d), gfx::Align::center);
 
-                // Estado de espera
-                const float pulse = (std::sin(clock_ * 4.0f) + 1.0f) * 0.5f;
-                list.circle(580, 580, 6.0f,
-                            Color::rgb(0x76d6ff).with_alpha(0.4f + 0.6f * pulse));
-                paint.body(machete::i18n::tr(machete::i18n::StringId::DriveWaiting), 600, 587, 20,
-                            theme.text_muted);
+                // Estado de espera o error de red
+                if (drive.auth_state() == machete::cloud::AuthState::Error)
+                {
+                    list.circle(580, 580, 6.0f, Color::rgb(0xff5555));
+                    const std::string err = drive.last_error().empty()
+                                                ? "Fallo al conectar con Google. Verifica Internet."
+                                                : drive.last_error();
+                    paint.body(err.c_str(), 600, 587, 18, Color::rgb(0xff8888));
+                }
+                else
+                {
+                    const float pulse = (std::sin(clock_ * 4.0f) + 1.0f) * 0.5f;
+                    list.circle(580, 580, 6.0f,
+                                Color::rgb(0x76d6ff).with_alpha(0.4f + 0.6f * pulse));
+                    paint.body(machete::i18n::tr(machete::i18n::StringId::DriveWaiting), 600, 587, 20,
+                               theme.text_muted);
+                }
 
                 const Rect close_btn{570, 620, 780, 54};
                 ui::Look close_look;

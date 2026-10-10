@@ -21,15 +21,13 @@ bash "$root/tools/validate-assets.sh"
 echo "==> [2/4] Validando pistas de audio..."
 python3 "$root/tools/audio-check.py"
 
-# 2. Compilar aplicación nativa (eboot.bin + sce_module) si no está construida
-if [[ ! -f "$root/dist/$title_id/eboot.bin" ]]; then
-    echo "==> [3/5] Compilando binario nativo PS5 (eboot.bin)..."
-    PATH="/opt/homebrew/bin:/opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/opt/llvm/bin:$PATH" \
-    PS5_CLANG=/opt/homebrew/opt/llvm/bin/clang \
-    HOST_CXX=/opt/homebrew/opt/llvm/bin/clang++ \
-    CXX=/opt/homebrew/opt/llvm/bin/clang++ \
-    make -C "$root" app
-fi
+# 2. Compilar aplicación nativa (eboot.bin + sce_module)
+echo "==> [3/5] Compilando binario nativo PS5 (eboot.bin)..."
+PATH="/opt/homebrew/bin:/opt/homebrew/opt/coreutils/libexec/gnubin:/opt/homebrew/opt/llvm/bin:$PATH" \
+PS5_CLANG=/opt/homebrew/opt/llvm/bin/clang \
+HOST_CXX=/opt/homebrew/opt/llvm/bin/clang++ \
+CXX=/opt/homebrew/opt/llvm/bin/clang++ \
+make -C "$root" app
 
 dist_dir="$root/dist/$title_id"
 [[ -f "$dist_dir/eboot.bin" ]] || {
@@ -44,11 +42,13 @@ if [[ -f "$root/sce_sys/snd0.at9" ]]; then
     cp "$root/sce_sys/snd0.at9" "$dist_dir/sce_sys/"
 fi
 
-# Copiar Lapy JB Daemon integrado dentro de la estructura de la app (PPSA99001/daemon)
+# Copiar Lapy JB Daemon integrado dentro de la estructura de la app (lapy.elf y daemon/lapy_jb_daemon.elf)
 mkdir -p "$dist_dir/daemon"
 if [[ -d "$root/payloads/lapy_jb" ]]; then
     cp -r "$root/payloads/lapy_jb/"* "$dist_dir/daemon/"
+    cp "$root/payloads/lapy_jb/lapy_jb_daemon.elf" "$dist_dir/lapy.elf" 2>/dev/null || true
     chmod 0777 "$dist_dir/daemon/lapy_jb_daemon.elf" 2>/dev/null || true
+    chmod 0777 "$dist_dir/lapy.elf" 2>/dev/null || true
 fi
 chmod 0777 "$dist_dir/eboot.bin"
 chmod 0777 "$dist_dir/sce_module/libc.prx" 2>/dev/null || true
@@ -83,7 +83,8 @@ PACKAGE CONTENTS:
 - PPSA99001/sce_sys/param.json    (Title ID: PPSA99001 package metadata)
 - PPSA99001/sce_sys/icon0.png     (Official Liquid Glass Memory Card icon)
 - PPSA99001/assets/               (SDF fonts, UI graphics, soundbank)
-- PPSA99001/daemon/               (Embedded root privilege daemon)
+- PPSA99001/lapy.elf               (ProsperoStore standard root privilege helper)
+- PPSA99001/daemon/               (Embedded fallback privilege daemon)
 - PPSA99001/INSTRUCTIONS.txt      (Installation and operational guide)
 - PPSA99001/LEGAL.txt             (License, warranty, and trademark notices)
 
@@ -107,7 +108,7 @@ CONTROLLER SHORTCUTS:
 - D-Pad: Navigate game list and menus
 - Cross (X): Select / Confirm action
 - Circle (O): Cancel / Back
-- Triangle: Open Google Drive Cloud synchronization
+- Triangle: Open Google Drive Cloud synchronization directly
 - Square: Refresh games list and connected USB devices
 - L3 (Left Stick Click): Switch language (English / Spanish) in real-time
 
@@ -133,7 +134,8 @@ CONTENIDO DEL PAQUETE:
 - PPSA99001/sce_sys/param.json    (Metadatos de paquete Title ID: PPSA99001)
 - PPSA99001/sce_sys/icon0.png     (Icono oficial Liquid Glass Memory Card)
 - PPSA99001/assets/               (Fuentes SDF, gráficos de interfaz, banco de sonido)
-- PPSA99001/daemon/               (Demonio integrado de privilegios root)
+- PPSA99001/lapy.elf               (Ayudante estándar ProsperoStore para privilegios root)
+- PPSA99001/daemon/               (Demonio integrado de respaldo de privilegios root)
 - PPSA99001/INSTRUCTIONS.txt      (Guía de instalación y uso)
 - PPSA99001/LEGAL.txt             (Licencia, garantía y avisos legales)
 

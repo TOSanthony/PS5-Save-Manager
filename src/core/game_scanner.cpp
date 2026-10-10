@@ -249,9 +249,19 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     };
 
     // =========================================================================
-    // 1. Escanear Aplicaciones Instaladas (/user/app/, /mnt/ext1/user/app/, etc.)
+    // 1. Escanear Aplicaciones Instaladas
     // =========================================================================
-    for (const char *app_base : {"/user/app", "/mnt/ext1/user/app", "/mnt/ext0/user/app"})
+    const char *app_bases[] = {
+        "/user/app",
+        "/system_ex/app",
+        "/mnt/ext0/user/app",
+        "/mnt/ext0/app",
+        "/mnt/ext1/user/app",
+        "/mnt/ext1/app",
+        "/data/homebrew",
+    };
+
+    for (const char *app_base : app_bases)
     {
         DIR *app_dir = opendir(app_base);
         if (!app_dir)
@@ -295,6 +305,10 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                     game.title = extract_title_from_param_sfo(app_path + "/sce_sys/param.sfo");
                 if (game.title.empty() && file_exists(app_path + "/sce_sys/PARAM.SFO"))
                     game.title = extract_title_from_param_sfo(app_path + "/sce_sys/PARAM.SFO");
+                if (game.title.empty() && file_exists(std::string("/user/appmeta/") + title_id + "/param.json"))
+                    game.title = extract_title_from_param_json(std::string("/user/appmeta/") + title_id + "/param.json");
+                if (game.title.empty() && file_exists(std::string("/system_data/priv/appmeta/") + title_id + "/param.json"))
+                    game.title = extract_title_from_param_json(std::string("/system_data/priv/appmeta/") + title_id + "/param.json");
             }
 
             if (game.size_str.empty())
@@ -311,6 +325,7 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     // 2. Escanear Partidas Guardadas:
     //    - PS5: /user/home/*/savedata_prospero/
     //    - PS4: /user/home/*/savedata/
+    //    - Respaldos /user/home/*/savedata_backup/
     // =========================================================================
     DIR *home_dir = opendir("/user/home");
     if (home_dir)
@@ -322,8 +337,8 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
 
             const std::string user_base = std::string("/user/home/") + user_entry->d_name;
 
-            // Escanear tanto savedata_prospero (PS5) como savedata (PS4)
-            for (const char *save_sub : {"savedata_prospero", "savedata"})
+            // Escanear tanto savedata_prospero (PS5) como savedata (PS4) y copias
+            for (const char *save_sub : {"savedata_prospero", "savedata", "savedata_backup"})
             {
                 const std::string savedata_path = user_base + "/" + save_sub;
                 DIR *savedata_dir = opendir(savedata_path.c_str());
@@ -341,22 +356,33 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                     auto &game = find_or_add_game(title_id);
                     game.save_path = game_save_folder;
 
-                    // Si no tenía icono, buscar en el save
+                    // Si no tenía icono, buscar en el save o en appmeta
                     if (game.icon_path.empty())
                     {
-                        if (file_exists(game_save_folder + "/sce_sys/icon0.png"))
-                            game.icon_path = game_save_folder + "/sce_sys/icon0.png";
-                        else if (file_exists(game_save_folder + "/icon0.png"))
-                            game.icon_path = game_save_folder + "/icon0.png";
+                        for (const std::string &p : {
+                                 game_save_folder + "/sce_sys/icon0.png",
+                                 game_save_folder + "/icon0.png",
+                                 std::string("/user/appmeta/") + title_id + "/icon0.png",
+                                 std::string("/system_data/priv/appmeta/") + title_id + "/icon0.png",
+                             })
+                        {
+                            if (file_exists(p))
+                            {
+                                game.icon_path = p;
+                                break;
+                            }
+                        }
                     }
 
-                    // Si no tenía título, buscar en el save
+                    // Si no tenía título, buscar en el save o en appmeta
                     if (game.title.empty() || game.title == title_id)
                     {
                         if (file_exists(game_save_folder + "/sce_sys/param.json"))
                             game.title = extract_title_from_param_json(game_save_folder + "/sce_sys/param.json");
                         if (game.title.empty() && file_exists(game_save_folder + "/sce_sys/param.sfo"))
                             game.title = extract_title_from_param_sfo(game_save_folder + "/sce_sys/param.sfo");
+                        if (game.title.empty() && file_exists(std::string("/user/appmeta/") + title_id + "/param.json"))
+                            game.title = extract_title_from_param_json(std::string("/user/appmeta/") + title_id + "/param.json");
                     }
 
                     // Verificar keystone
@@ -397,24 +423,6 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
             return a.total_bytes > b.total_bytes;
         return a.title < b.title;
     });
-
-    // =========================================================================
-    // 4. Fallback elegante: si no se detectaron juegos (p. ej. en pruebas en host
-    //    o en un arranque virgen antes del jailbreak), proveer demostración.
-    // =========================================================================
-    if (games.empty())
-    {
-        games.push_back({"Marvel's Spider-Man 2", "PPSA01411", "PS5", "", "", "", "14.2 MB",
-                         "Hoy, 05:30 PM", 14ULL * 1024ULL * 1024ULL, true, 0});
-        games.push_back({"God of War Ragnarok", "PPSA08331", "PS5", "", "", "", "8.1 MB",
-                         "Ayer, 09:15 PM", 8ULL * 1024ULL * 1024ULL, true, 0});
-        games.push_back({"Bloodborne", "CUSA03173", "PS4", "", "", "", "35.4 MB",
-                         "Hace 3 días", 35ULL * 1024ULL * 1024ULL, true, 0});
-        games.push_back({"Elden Ring", "PPSA04609", "PS5", "", "", "", "24.8 MB",
-                         "12/09/2026", 24ULL * 1024ULL * 1024ULL, true, 0});
-        games.push_back({"Astro's Playroom", "PPSA01325", "PS5", "", "", "", "2.4 MB",
-                         "01/09/2026", 2ULL * 1024ULL * 1024ULL, true, 0});
-    }
 
     return games;
 }
