@@ -20,25 +20,30 @@ MacheteSVG is built upon the collaborative spirit and pioneering achievements of
 
 ### 4. etaHEN & OnionHEN Teams
 * **Developers:** LightningMods, ChendoChap, Sleirsgoevy, Astrelsky, Illusion, and scene contributors.
-* **Contribution:** Development of HEN environments (etaHEN and OnionHEN) for PlayStation 5, `kstuff` kernel patches, on-demand jailbreak APIs, and system infrastructure enabling native homebrew on modern firmwares.
+* **Contribution:** Development of HEN environments (etaHEN and OnionHEN) for PlayStation 5, on-demand jailbreak APIs, and system infrastructure enabling native homebrew on modern firmwares.
 
 ### 5. ShadowMountPlus — Drakmor & VoidWhisper
 * **Project:** [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)
 * **Developers:** Drakmor (Lead developer of ShadowMountPlus) & VoidWhisper (Original ShadowMount creator)
 * **Contribution:** Groundbreaking automated filesystem and PFS mounting architecture for jailbroken PS5, and techniques for mounting PFS and user partitions without Prospero vnode cache corruption, enabling reliable access and instant reload of save data for both PS5 native titles and backwards-compatible PS4 games.
 
-### 6. KSystemLib
+### 6. kstuff-lite & kstuff — EchoStretch & sleirsgoevy
+* **Projects:** [kstuff-lite](https://github.com/EchoStretch/kstuff-lite) / [ps5-kstuff](https://github.com/sleirsgoevy/ps4jb-payloads)
+* **Developers:** EchoStretch (Lead developer of kstuff-lite) & sleirsgoevy (Original kstuff architecture)
+* **Contribution:** Vital kernel patching framework for the PlayStation 5 operating system (Prospero), providing essential fself verification bypasses, dynamic payload hooks, and memory patching required for native homebrew execution and reliable filesystem redirection across all jailbroken PS5 firmwares.
+
+### 7. KSystemLib
 * **Contribution:** Low-level kernel interface and system library primitives for PlayStation 5 homebrew, facilitating robust syscall execution and system management within jailbroken Prospero environments.
 
-### 7. ps5-payload-sdk — John Törnblom
+### 8. ps5-payload-sdk — John Törnblom
 * **Project:** [ps5-payload-sdk](https://github.com/ps5-payload-dev/pacbrew-packages)
 * **Contribution:** Native PlayStation 5 toolchain, `prospero-lld` linker, Prospero/FreeBSD header definitions, and cross-compilation environment.
 
-### 8. ps5-homebrew-ui — BlackBearReloaded
+### 9. ps5-homebrew-ui — BlackBearReloaded
 * **Project:** [ps5-homebrew-ui](https://github.com/BlackBearReloaded/ps5-homebrew-ui)
 * **Contribution:** Native OpenGL hardware-accelerated user interface framework for PlayStation 5, featuring 60 FPS rendering, spring kinematics, complete DualSense controller support, and modern Liquid Glass aesthetic.
 
-### 9. stb_image — Sean Barrett
+### 10. stb_image — Sean Barrett
 * **Project:** [stb](https://github.com/nothings/stb)
 * **Contribution:** Single-header C image library for zero-overhead decoding of PNG assets (`icon0.png`) to GPU textures.
 
@@ -60,25 +65,30 @@ MacheteSVG is built upon the collaborative spirit and pioneering achievements of
 
 ### 4. etaHEN & OnionHEN Teams
 * **Desarrolladores:** LightningMods, ChendoChap, Sleirsgoevy, Astrelsky, Illusion y colaboradores de la escena.
-* **Aportación:** Desarrollo de los entornos HEN (etaHEN y OnionHEN) para PlayStation 5, parches de kernel `kstuff`, APIs de jailbreak on-demand e infraestructura que hace posible la ejecución de homebrew nativo en firmwares modernos.
+* **Aportación:** Desarrollo de los entornos HEN (etaHEN y OnionHEN) para PlayStation 5, APIs de jailbreak on-demand e infraestructura que hace posible la ejecución de homebrew nativo en firmwares modernos.
 
 ### 5. ShadowMountPlus — Drakmor & VoidWhisper
 * **Proyecto:** [ShadowMountPlus](https://github.com/drakmor/ShadowMountPlus)
 * **Desarrolladores:** Drakmor (Desarrollador principal de ShadowMountPlus) y VoidWhisper (Creador original de ShadowMount)
 * **Aportación:** Arquitectura pionera de montaje automatizado de sistemas de archivos y contenedores PFS en PS5 con jailbreak, junto con técnicas de montaje de particiones de usuario sin corrupción de caché de vnodes en Prospero, resolviendo el acceso fiable y la recarga instantánea de datos de guardado tanto de títulos nativos de PS5 como de PS4 en retrocompatibilidad.
 
-### 6. KSystemLib
+### 6. kstuff-lite y kstuff — EchoStretch y sleirsgoevy
+* **Proyectos:** [kstuff-lite](https://github.com/EchoStretch/kstuff-lite) / [ps5-kstuff](https://github.com/sleirsgoevy/ps4jb-payloads)
+* **Desarrolladores:** EchoStretch (Desarrollador principal de kstuff-lite) y sleirsgoevy (Arquitectura original de kstuff)
+* **Aportación:** Infraestructura vital de parches de kernel para el sistema operativo de PlayStation 5 (Prospero), proporcionando la evasión de verificación fself, ganchos de payloads dinámicos y modificaciones de memoria necesarias para la ejecución de homebrew nativo y redirección confiable del sistema de archivos en todos los firmwares con jailbreak.
+
+### 7. KSystemLib
 * **Aportación:** Primitivas de biblioteca de sistema y llamadas de kernel de bajo nivel para aplicaciones homebrew en PlayStation 5, facilitando la ejecución segura de llamadas al sistema y la gestión en entornos Prospero con jailbreak.
 
-### 7. ps5-payload-sdk — John Törnblom
+### 8. ps5-payload-sdk — John Törnblom
 * **Proyecto:** [ps5-payload-sdk](https://github.com/ps5-payload-dev/pacbrew-packages)
 * **Aportación:** Cadena de herramientas (toolchain) para PS5, enlazador `prospero-lld`, definiciones de cabeceras de Prospero/FreeBSD y entorno de compilación cruzada.
 
-### 8. ps5-homebrew-ui — BlackBearReloaded
+### 9. ps5-homebrew-ui — BlackBearReloaded
 * **Proyecto:** [ps5-homebrew-ui](https://github.com/BlackBearReloaded/ps5-homebrew-ui)
 * **Aportación:** Framework de interfaz gráfica nativo para PlayStation 5, renderizado acelerado por hardware OpenGL a 60 FPS, física de resortes (Spring physics), soporte completo para el mando DualSense y diseño moderno Liquid Glass.
 
-### 9. stb_image — Sean Barrett
+### 10. stb_image — Sean Barrett
 * **Proyecto:** [stb](https://github.com/nothings/stb)
 * **Aportación:** Biblioteca de cabecera única en C para decodificación eficiente y sin sobrecarga de imágenes PNG (`icon0.png`) a texturas GPU.
 

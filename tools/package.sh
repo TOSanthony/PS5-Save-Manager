@@ -202,6 +202,7 @@ Entertainment Inc., Google LLC, or any of their subsidiaries or affiliates.
 - Apollo Save Tool (Copyright (C) Bucanero) - GPL-3.0
 - PS5 Lapy JB Daemon (Copyright (C) ArkSama & Lapy)
 - ShadowMountPlus (Copyright (C) Drakmor & VoidWhisper) - GPL-3.0
+- kstuff-lite (Copyright (C) EchoStretch & sleirsgoevy)
 - KSystemLib
 - ps5-payload-sdk (Copyright (C) John Törnblom) - BSD-2-Clause
 - stb_image / stb_truetype (Copyright (C) Sean Barrett) - Public Domain / MIT
@@ -238,6 +239,7 @@ Entertainment Inc., Google LLC ni ninguna de sus filiales.
 - Apollo Save Tool (Copyright (C) Bucanero) - GPL-3.0
 - PS5 Lapy JB Daemon (Copyright (C) ArkSama & Lapy)
 - ShadowMountPlus (Copyright (C) Drakmor y VoidWhisper) - GPL-3.0
+- kstuff-lite (Copyright (C) EchoStretch y sleirsgoevy)
 - KSystemLib
 - ps5-payload-sdk (Copyright (C) John Törnblom) - BSD-2-Clause
 - stb_image / stb_truetype (Copyright (C) Sean Barrett) - Public Domain / MIT
