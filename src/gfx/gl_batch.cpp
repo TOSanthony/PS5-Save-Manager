@@ -384,7 +384,6 @@ void GlBatch::draw(const DrawList &list, const Viewport &viewport, int surface_w
     // reads of the previous frame (ps5-opengl drains on same-size reuse).
     if (!instances.empty())
     {
-        MACHETE_BREADCRUMB("gl_batch.draw: upload instances");
         glBindBuffer(GL_ARRAY_BUFFER, buffer_);
         capacity_ = std::max(capacity_, instances.size());
         glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(capacity_ * sizeof(Instance)),
@@ -395,7 +394,6 @@ void GlBatch::draw(const DrawList &list, const Viewport &viewport, int surface_w
     }
     if (!mesh.empty())
     {
-        MACHETE_BREADCRUMB("gl_batch.draw: upload mesh");
         glBindBuffer(GL_ARRAY_BUFFER, mesh_buffer_);
         mesh_capacity_ = std::max(mesh_capacity_, mesh.size());
         glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(mesh_capacity_ * sizeof(MeshVertex)),
@@ -431,7 +429,6 @@ void GlBatch::draw(const DrawList &list, const Viewport &viewport, int surface_w
     bool scissor = false;
     bool mesh_bound = false;
     glBindVertexArray(vao_);
-    MACHETE_BREADCRUMB("gl_batch.draw: render runs");
     for (const Run &run : list.runs())
     {
         if (run.count == 0)
@@ -478,7 +475,6 @@ void GlBatch::draw(const DrawList &list, const Viewport &viewport, int surface_w
     if (scissor)
         glDisable(GL_SCISSOR_TEST);
     glBindVertexArray(0);
-    MACHETE_BREADCRUMB("gl_batch.draw: done");
 }
 
 } // namespace hui::gfx

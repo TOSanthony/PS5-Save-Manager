@@ -168,7 +168,6 @@ void Renderer::present(GLuint framebuffer, int width, int height, float virtual_
         const Layer &layer = layers_[i];
         if (layer.kind == Kind::glass)
         {
-            MACHETE_BREADCRUMB("renderer: capture_glass");
             capture_glass(i, virtual_width, virtual_height);
             glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
             glViewport(0, 0, width, height);
@@ -177,11 +176,6 @@ void Renderer::present(GLuint framebuffer, int width, int height, float virtual_
         if (layer.kind == Kind::list)
         {
             instances_ += layer.list->instances().size();
-            MACHETE_BREADCRUMB("renderer: play list");
-        }
-        else if (layer.kind == Kind::backdrop)
-        {
-            MACHETE_BREADCRUMB("renderer: play backdrop");
         }
         play(layer, width, height, virtual_width, virtual_height);
     }

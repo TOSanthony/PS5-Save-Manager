@@ -198,19 +198,9 @@ void set_breadcrumb(const char *step)
 {
     if (!step)
         return;
-    {
-        std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
-        std::strncpy(s_current_breadcrumb, step, sizeof(s_current_breadcrumb) - 1);
-        s_current_breadcrumb[sizeof(s_current_breadcrumb) - 1] = '\0';
-    }
-
-    if (std::strncmp(step, "frame ", 6) != 0 &&
-        std::strncmp(step, "draw_dashboard: game_card", 25) != 0 &&
-        std::strncmp(step, "gl_batch.draw:", 14) != 0 &&
-        std::strncmp(step, "renderer: play", 14) != 0)
-    {
-        write("[BREADCRUMB]", "%s", step);
-    }
+    std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
+    std::strncpy(s_current_breadcrumb, step, sizeof(s_current_breadcrumb) - 1);
+    s_current_breadcrumb[sizeof(s_current_breadcrumb) - 1] = '\0';
 }
 
 const char *get_breadcrumb()
@@ -249,29 +239,28 @@ void vwrite(const char *tag, const char *fmt, va_list args)
 
     std::lock_guard<std::recursive_mutex> lock(s_log_mutex);
 
-    // Escribir en consola estándar (stdout)
+    // Escribir en consola estandar (stdout)
     std::fputs(line, stdout);
     std::fflush(stdout);
 
-    // Enviar a la salida de depuración del kernel de PS5
+    // Enviar a la salida de depuracion del kernel de PS5
     if (sceKernelDebugOutText)
         sceKernelDebugOutText(0, line);
 
-    // Escribir en todos los descriptores de archivo abiertos en disco
-    const auto write_and_sync = [](int fd, const char *text, std::size_t text_len)
+    // Escribir de forma no bloqueante en descriptores de disco (sin fsync por linea)
+    const auto write_log_fd = [](int fd, const char *text, std::size_t text_len)
     {
         if (fd >= 0)
         {
             auto w = ::write(fd, text, text_len);
             (void)w;
-            ::fsync(fd);
         }
     };
 
-    write_and_sync(s_fd_primary, line, static_cast<std::size_t>(len));
-    write_and_sync(s_fd_sandbox, line, static_cast<std::size_t>(len));
-    write_and_sync(s_fd_data,    line, static_cast<std::size_t>(len));
-    write_and_sync(s_fd_userapp, line, static_cast<std::size_t>(len));
+    write_log_fd(s_fd_primary, line, static_cast<std::size_t>(len));
+    write_log_fd(s_fd_sandbox, line, static_cast<std::size_t>(len));
+    write_log_fd(s_fd_data,    line, static_cast<std::size_t>(len));
+    write_log_fd(s_fd_userapp, line, static_cast<std::size_t>(len));
 }
 
 void write(const char *tag, const char *fmt, ...)

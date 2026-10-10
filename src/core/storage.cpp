@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "storage.hpp"
+#include "cloud/google_drive.hpp"
 #include "core/i18n.hpp"
 
 #include <algorithm>
@@ -190,10 +191,13 @@ std::vector<StorageDevice> scan_storage_devices()
         StorageDevice dev;
         dev.type = StorageType::Cloud;
         dev.id = "cloud_gdrive";
-        dev.label = machete::i18n::tr(machete::i18n::StringId::StorageCloud);
+        const bool gdrive_ok = machete::cloud::GoogleDrive::instance().is_authorized();
+        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+        dev.label = gdrive_ok ? machete::i18n::tr(machete::i18n::StringId::StorageCloud)
+                              : (is_es ? "Google Drive (No Vinculado)" : "Google Drive (Not Linked)");
         dev.mount_path = "Cloud:";
         dev.root_dir = "Cloud:/" + std::string(ROOT_DIR_NAME);
-        dev.connected = true;
+        dev.connected = gdrive_ok;
         devices.push_back(dev);
     }
 

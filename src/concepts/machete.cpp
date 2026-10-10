@@ -527,6 +527,8 @@ class Machete final : public app::Concept
         }
         else if (focus_ == kBtnBackup)
         {
+            if (games_.empty())
+                return;
             dialog_is_backup_ = true;
             dialog_ = true;
             dialog_focus_ = 0;
@@ -534,6 +536,11 @@ class Machete final : public app::Concept
         }
         else if (focus_ == kBtnRestore)
         {
+            if (games_.empty())
+                return;
+            const auto &game = games_[static_cast<std::size_t>(selected_game_)];
+            MACHETE_BREADCRUMB("machete: find_available_backups");
+            available_backups_ = machete::save::find_available_backups(game, active_devices_);
             dialog_is_backup_ = false;
             dialog_ = true;
             dialog_focus_ = 0;
@@ -649,7 +656,9 @@ class Machete final : public app::Concept
 
     void update_dialog(const InputFrame &input, app::Feedback &feedback)
     {
-        const int opt_count = static_cast<int>(active_devices_.size());
+        if (dialog_is_backup_)
+        {
+            const int opt_count = static_cast<int>(active_devices_.size());
         if (input.nav == Direction::down)
         {
             if (dialog_focus_ < opt_count)
@@ -687,54 +696,97 @@ class Machete final : public app::Concept
                 if (dev.type == machete::storage::StorageType::Cloud)
                 {
                     auto &drive = machete::cloud::GoogleDrive::instance();
-                    if (dialog_is_backup_)
+                    if (!drive.is_authorized())
                     {
-                        drive.backup_save(game.title_id, game.title, game.save_path,
-                                          [this](bool /*ok*/, const std::string &msg) {
-                                              std::snprintf(notification_text_,
-                                                            sizeof(notification_text_), "%s",
-                                                            msg.c_str());
-                                              notification_timer_ = 4.0f;
-                                          });
-                        std::snprintf(notification_text_, sizeof(notification_text_), "%s",
-                                      machete::i18n::tr(machete::i18n::StringId::ToastUploadingGeneric));
+                        dialog_ = false;
+                        open_google_drive_dialog(feedback);
+                        return;
                     }
-                    else
-                    {
-                        drive.restore_save("cloud_slot1_id", game.save_path,
-                                           [this](bool /*ok*/, const std::string &msg) {
-                                               std::snprintf(notification_text_,
-                                                             sizeof(notification_text_), "%s",
-                                                             msg.c_str());
-                                               notification_timer_ = 4.0f;
-                                           });
-                        std::snprintf(notification_text_, sizeof(notification_text_), "%s",
-                                      machete::i18n::tr(machete::i18n::StringId::ToastDownloadingFromCloud));
-                    }
+                    drive.backup_save(game.title_id, game.title, game.save_path,
+                                      [this](bool /*ok*/, const std::string &msg) {
+                                          std::snprintf(notification_text_,
+                                                        sizeof(notification_text_), "%s",
+                                                        msg.c_str());
+                                          notification_timer_ = 4.0f;
+                                      });
+                    std::snprintf(notification_text_, sizeof(notification_text_), "%s",
+                                  machete::i18n::tr(machete::i18n::StringId::ToastUploadingGeneric));
+                    notification_timer_ = 4.0f;
+                    dialog_ = false;
+                    feedback.play(audio::Cue::saved, 1.0f, 0.0f);
                 }
                 else
                 {
-                    // Operación Real en Sistema de Archivos Local
-                    if (dialog_is_backup_)
-                    {
-                        const auto res = machete::save::backup_game_save(game, dev);
-                        std::snprintf(notification_text_, sizeof(notification_text_), "%s",
-                                      res.message.c_str());
-                    }
-                    else
-                    {
-                        const auto res = machete::save::restore_game_save(game, dev);
-                        std::snprintf(notification_text_, sizeof(notification_text_), "%s",
-                                      res.message.c_str());
-                    }
+                    MACHETE_BREADCRUMB("machete: backup_game_save");
+                    const auto res = machete::save::backup_game_save(game, dev);
+                    std::snprintf(notification_text_, sizeof(notification_text_), "%s",
+                                  res.message.c_str());
+                    notification_timer_ = 4.0f;
+                    dialog_ = false;
+                    feedback.play(res.success ? audio::Cue::saved : audio::Cue::error, 1.0f, 0.0f);
                 }
-
-                notification_timer_ = 4.0f;
-                dialog_ = false;
-                feedback.play(audio::Cue::saved, 1.0f, 0.0f);
             }
         }
     }
+    else
+    {
+        // DIALOGO DE RESTAURACION: SELECCION DE COPIA ESPECIFICA
+        if (available_backups_.empty())
+        {
+            if (input.is_pressed(Action::back) || input.is_pressed(Action::confirm))
+            {
+                dialog_ = false;
+                feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
+            }
+        }
+        else
+        {
+            const int opt_count = static_cast<int>(available_backups_.size());
+            if (input.nav == Direction::down)
+            {
+                if (dialog_focus_ < opt_count)
+                {
+                    dialog_focus_++;
+                    feedback.play(audio::Cue::focus, 1.0f, 0.0f);
+                }
+            }
+            else if (input.nav == Direction::up)
+            {
+                if (dialog_focus_ > 0)
+                {
+                    dialog_focus_--;
+                    feedback.play(audio::Cue::focus, 1.0f, 0.0f);
+                }
+            }
+
+            if (input.is_pressed(Action::back))
+            {
+                dialog_ = false;
+                feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
+            }
+            else if (input.is_pressed(Action::confirm))
+            {
+                if (dialog_focus_ == opt_count) // Boton Cancelar
+                {
+                    dialog_ = false;
+                    feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
+                }
+                else if (dialog_focus_ >= 0 && dialog_focus_ < opt_count && !games_.empty())
+                {
+                    const auto &game = games_[static_cast<std::size_t>(selected_game_)];
+                    const auto &backup = available_backups_[static_cast<std::size_t>(dialog_focus_)];
+                    MACHETE_BREADCRUMB("machete: restore_backup_item");
+                    const auto res = machete::save::restore_backup_item(game, backup);
+                    std::snprintf(notification_text_, sizeof(notification_text_), "%s",
+                                  res.message.c_str());
+                    notification_timer_ = 4.5f;
+                    dialog_ = false;
+                    feedback.play(res.success ? audio::Cue::saved : audio::Cue::error, 1.0f, 0.0f);
+                }
+            }
+        }
+    }
+}
 
     ui::Look look(int item) const
     {
@@ -836,16 +888,11 @@ class Machete final : public app::Concept
 
         const int visible_count = std::min(5, total_games);
 
-        MACHETE_BREADCRUMB("draw_dashboard: game_loop");
         for (int i = 0; i < visible_count; ++i)
         {
             const int game_idx = scroll_offset_ + i;
             if (game_idx >= total_games)
                 break;
-
-            char card_crumb[64];
-            std::snprintf(card_crumb, sizeof(card_crumb), "draw_dashboard: game_card %d", i);
-            MACHETE_BREADCRUMB(card_crumb);
 
             const auto &game = games_[static_cast<std::size_t>(game_idx)];
             const Rect r = kRects[kGame0 + i];
@@ -906,13 +953,11 @@ class Machete final : public app::Concept
         // ==========================================
         // 3. PANEL DERECHO: DETALLES Y ACCIONES
         // ==========================================
-        MACHETE_BREADCRUMB("draw_dashboard: right_panel");
         const Rect right_panel{806, 210, 1018, 750};
         paint.panel(right_panel);
 
         if (!games_.empty())
         {
-            MACHETE_BREADCRUMB("draw_dashboard: right_panel_active");
             const std::size_t safe_idx = static_cast<std::size_t>(
                 std::clamp(selected_game_, 0, static_cast<int>(games_.size()) - 1));
             const auto &current_game = games_[safe_idx];
@@ -1157,63 +1202,180 @@ class Machete final : public app::Concept
         }
 
         // ==========================================
-        // 5. DIALOGO MODAL: SELECTOR DE UBICACION
+        // 5. DIALOGO MODAL: SELECTOR DE DESTINO / RESTAURACION
         // ==========================================
         const float show = dialog_show_.value;
         if (show > 0.01f)
         {
             list.rounded_rect({0, 0, gfx::kVirtualWidth, gfx::kVirtualHeight}, 0,
-                              Color::rgb(0x000000).with_alpha(0.65f * show));
+                              Color::rgb(0x000000).with_alpha(0.68f * show));
             list.push_opacity(tween::clamp01(show));
             list.push_transform(0.94f + 0.06f * tween::clamp01(show), 960, 540, 0, 0);
 
-            const Rect dlg{520, 240, 880, 580};
+            const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+            const Rect dlg{460, 190, 1000, 700};
             paint.panel(dlg);
 
-            paint.heading(dialog_is_backup_
-                              ? machete::i18n::tr(machete::i18n::StringId::DialogBackupHeading)
-                              : machete::i18n::tr(machete::i18n::StringId::DialogRestoreHeading),
-                          570, 310, 36, theme.text);
-            paint.body(machete::i18n::tr(machete::i18n::StringId::DialogStructureSubtitle),
-                       570, 350, 21, theme.text_muted);
+            const std::string curr_title = !games_.empty()
+                ? (!games_[static_cast<std::size_t>(selected_game_)].title.empty()
+                       ? games_[static_cast<std::size_t>(selected_game_)].title
+                       : games_[static_cast<std::size_t>(selected_game_)].title_id)
+                : "";
 
-            const int opt_count = static_cast<int>(active_devices_.size());
-            const float item_h = 58.0f;
-            for (int s = 0; s < opt_count; ++s)
+            if (dialog_is_backup_)
             {
-                const auto &dev = active_devices_[static_cast<std::size_t>(s)];
-                const Rect opt_rect{570, 385.0f + static_cast<float>(s) * item_h, 780, 52};
-                const bool is_focused = (dialog_focus_ == s);
+                // CABECERA MODAL RESPALDO
+                paint.heading(is_es ? "DESTINO DE COPIA DE SEGURIDAD" : "BACKUP DESTINATION",
+                              500, 252, 34, theme.text);
+                char sub[160];
+                std::snprintf(sub, sizeof(sub),
+                              is_es ? "Guardar partida de %s en:" : "Save backup for %s to:",
+                              curr_title.c_str());
+                paint.body(sub, 500, 288, 20, theme.text_muted);
 
-                if (is_focused)
+                // LISTA DE DISPOSITIVOS DE ALMACENAMIENTO
+                const int opt_count = static_cast<int>(active_devices_.size());
+                const float item_h = 74.0f;
+                for (int s = 0; s < opt_count; ++s)
                 {
-                    paint.surface(opt_rect, theme.radius, theme.surface_high, theme.primary, 1.0f);
-                    paint.focus_ring(opt_rect, theme.radius, 1.0f);
+                    const auto &dev = active_devices_[static_cast<std::size_t>(s)];
+                    const Rect opt_rect{500, 320.0f + static_cast<float>(s) * item_h, 920, 64};
+                    const bool is_focused = (dialog_focus_ == s);
+
+                    if (is_focused)
+                    {
+                        paint.surface(opt_rect, theme.radius, theme.surface_high, theme.primary, 1.0f);
+                        paint.focus_ring(opt_rect, theme.radius, 1.0f);
+                    }
+                    else
+                    {
+                        list.rounded_rect(opt_rect, theme.radius, Color::rgb(0xffffff).with_alpha(0.06f));
+                    }
+
+                    list.circle(opt_rect.x + 24, opt_rect.cy(), 6.0f,
+                                dev.connected ? Color::rgb(0x38ef7d) : Color::rgb(0x76d6ff));
+
+                    paint.body(dev.label.c_str(), opt_rect.x + 44, opt_rect.cy() - 6, 21,
+                               is_focused ? theme.text : theme.text.with_alpha(0.9f));
+
+                    const std::string path_desc = dev.root_dir.empty() ? "Google Drive Cloud Storage" : dev.root_dir;
+                    paint.label(path_desc.c_str(), opt_rect.x + 44, opt_rect.cy() + 18, 16,
+                                theme.text_muted);
+
+                    paint.label(dev.free_space_formatted().c_str(), opt_rect.x + opt_rect.w - 24,
+                                opt_rect.cy() + 6, 17,
+                                is_focused ? theme.primary : Color::rgb(0x76d6ff),
+                                gfx::Align::right);
+                }
+
+                // Boton Cancelar
+                const Rect cancel_btn{500, 320.0f + static_cast<float>(opt_count) * item_h + 16.0f, 920, 54};
+                ui::Look cancel_look;
+                cancel_look.focus = (dialog_focus_ == opt_count) ? 1.0f : 0.0f;
+                paint.button(cancel_btn, is_es ? "Cancelar" : "Cancel", ui::ButtonKind::secondary, cancel_look);
+            }
+            else
+            {
+                // CABECERA MODAL RESTAURACION
+                paint.heading(is_es ? "RESTAURAR COPIA DE SEGURIDAD" : "RESTORE SAVE BACKUP",
+                              500, 252, 34, theme.text);
+
+                if (available_backups_.empty())
+                {
+                    // ESTADO SIN COPIAS DISPONIBLES
+                    char sub[160];
+                    std::snprintf(sub, sizeof(sub),
+                                  is_es ? "No se encontraron copias para %s" : "No backups found for %s",
+                                  curr_title.c_str());
+                    paint.body(sub, 500, 288, 20, theme.text_muted);
+
+                    const Rect empty_box{500, 340, 920, 220};
+                    list.rounded_rect(empty_box, theme.radius, Color::rgb(0xffffff).with_alpha(0.04f));
+                    paint.stroke(empty_box, theme.radius, 1.0f, theme.outline);
+
+                    list.circle(empty_box.cx(), empty_box.y + 45, 18.0f, Color::rgb(0xffaa00).with_alpha(0.2f));
+                    paint.heading("!", empty_box.cx(), empty_box.y + 53, 26, Color::rgb(0xffaa00), gfx::Align::center);
+
+                    paint.heading(is_es ? "No hay respaldos disponibles" : "No backups available",
+                                  empty_box.cx(), empty_box.y + 100, 24, theme.text, gfx::Align::center);
+                    paint.body(is_es ? "Para restaurar una partida, primero realiza un respaldo o coloca la carpeta en:"
+                                     : "To restore a save, first create a backup or place folder in:",
+                               empty_box.cx(), empty_box.y + 135, 18, theme.text_muted, gfx::Align::center);
+                    paint.label("/mnt/usb0/MacheteSVG/ o /data/MacheteSVG/",
+                                empty_box.cx(), empty_box.y + 168, 18, Color::rgb(0x76d6ff), gfx::Align::center);
+
+                    const Rect close_btn{500, 600, 920, 54};
+                    ui::Look close_look;
+                    close_look.focus = 1.0f;
+                    paint.button(close_btn, is_es ? "Cerrar / Volver" : "Close / Back",
+                                 ui::ButtonKind::primary, close_look);
                 }
                 else
                 {
-                    list.rounded_rect(opt_rect, theme.radius,
-                                      Color::rgb(0xffffff).with_alpha(0.06f));
+                    // LISTA DE COPIAS DISPONIBLES
+                    char sub[160];
+                    std::snprintf(sub, sizeof(sub),
+                                  is_es ? "Selecciona la version a restaurar en %s:"
+                                        : "Select version to restore into %s:",
+                                  curr_title.c_str());
+                    paint.body(sub, 500, 288, 20, theme.text_muted);
+
+                    const int opt_count = static_cast<int>(available_backups_.size());
+                    const float item_h = 74.0f;
+                    for (int s = 0; s < opt_count; ++s)
+                    {
+                        const auto &item = available_backups_[static_cast<std::size_t>(s)];
+                        const Rect opt_rect{500, 320.0f + static_cast<float>(s) * item_h, 920, 64};
+                        const bool is_focused = (dialog_focus_ == s);
+
+                        if (is_focused)
+                        {
+                            paint.surface(opt_rect, theme.radius, theme.surface_high, theme.primary, 1.0f);
+                            paint.focus_ring(opt_rect, theme.radius, 1.0f);
+                        }
+                        else
+                        {
+                            list.rounded_rect(opt_rect, theme.radius, Color::rgb(0xffffff).with_alpha(0.06f));
+                        }
+
+                        // Badge de origen
+                        const Rect dev_badge{opt_rect.x + 14, opt_rect.y + 14, 110, 36};
+                        const Color badge_col = (item.storage_type == machete::storage::StorageType::USB)
+                            ? Color::rgb(0x195282)
+                            : ((item.storage_type == machete::storage::StorageType::SSD)
+                                ? Color::rgb(0x502878)
+                                : Color::rgb(0x1a4533));
+                        list.rounded_rect(dev_badge, 6.0f, badge_col.with_alpha(0.85f));
+                        paint.label(item.device_label.c_str(), dev_badge.cx(), dev_badge.cy() + 6, 15,
+                                    Color::rgb(0xffffff), gfx::Align::center);
+
+                        // Nombre de carpeta
+                        paint.body(item.folder_name.c_str(), opt_rect.x + 140, opt_rect.cy() - 6, 21,
+                                   is_focused ? theme.text : theme.text.with_alpha(0.9f));
+
+                        // Metadata
+                        char meta_str[128];
+                        std::snprintf(meta_str, sizeof(meta_str), "%s  |  %d archivos  |  %s",
+                                      item.timestamp_str.c_str(), item.file_count, item.size_str.c_str());
+                        paint.label(meta_str, opt_rect.x + 140, opt_rect.cy() + 18, 16, theme.text_muted);
+
+                        // Indicador Keystone
+                        if (item.has_keystone)
+                        {
+                            const Rect k_badge{opt_rect.x + opt_rect.w - 145, opt_rect.cy() - 14, 130, 28};
+                            list.rounded_rect(k_badge, 6.0f, Color::rgb(0x123620).with_alpha(0.85f));
+                            paint.label("KEYSTONE OK", k_badge.cx(), k_badge.cy() + 6, 14,
+                                        Color::rgb(0x38ef7d), gfx::Align::center);
+                        }
+                    }
+
+                    // Boton Cancelar
+                    const Rect cancel_btn{500, 320.0f + static_cast<float>(opt_count) * item_h + 16.0f, 920, 54};
+                    ui::Look cancel_look;
+                    cancel_look.focus = (dialog_focus_ == opt_count) ? 1.0f : 0.0f;
+                    paint.button(cancel_btn, is_es ? "Cancelar" : "Cancel", ui::ButtonKind::secondary, cancel_look);
                 }
-
-                list.circle(opt_rect.x + 24, opt_rect.cy(), 6.0f,
-                            dev.connected ? (is_focused ? theme.primary : Color::rgb(0x38ef7d))
-                                          : theme.text_muted);
-
-                paint.body(dev.label.c_str(), opt_rect.x + 44, opt_rect.cy() + 7, 20,
-                           is_focused ? theme.text : theme.text_muted);
-
-                paint.label(dev.free_space_formatted().c_str(), opt_rect.x + opt_rect.w - 18,
-                            opt_rect.cy() + 6, 16, is_focused ? theme.primary : theme.text_muted,
-                            gfx::Align::right);
             }
-
-            const Rect cancel_btn{570, 385.0f + static_cast<float>(opt_count) * item_h + 12.0f, 780,
-                                  54};
-            ui::Look cancel_look;
-            cancel_look.focus = (dialog_focus_ == opt_count) ? 1.0f : 0.0f;
-            paint.button(cancel_btn, machete::i18n::tr(machete::i18n::StringId::DialogCancel),
-                         ui::ButtonKind::secondary, cancel_look);
 
             list.pop_transform();
             list.pop_opacity();
@@ -1270,6 +1432,7 @@ class Machete final : public app::Concept
     int dialog_focus_ = 0;
     tween::Spring dialog_show_;
     tween::Spring dialog_focus_value_;
+    std::vector<machete::save::BackupItem> available_backups_;
 
     bool drive_dialog_ = false;
     int drive_dialog_focus_ = 0;

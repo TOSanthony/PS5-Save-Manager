@@ -15,6 +15,7 @@
 #if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
 extern "C"
 {
+    int sceSysmoduleLoadModule(std::uint32_t id);
     int sceNetInit(void);
     int sceNetTerm(void);
     int sceNetPoolCreate(const char *name, int size, int flags);
@@ -116,6 +117,11 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
 
     if (s_http < 0)
     {
+        sceSysmoduleLoadModule(0x000c); // SCE_SYSMODULE_NET
+        sceSysmoduleLoadModule(0x0017); // SCE_SYSMODULE_SSL
+        sceSysmoduleLoadModule(0x0015); // SCE_SYSMODULE_HTTP
+        sceSysmoduleLoadModule(0x002c); // SCE_SYSMODULE_HTTP2
+
         (void)sceNetInit();
         s_pool = sceNetPoolCreate("MacheteNet", 1024 * 1024, 0);
         if (s_pool < 0)
@@ -261,7 +267,13 @@ std::string GoogleDrive::user_code() const
 bool GoogleDrive::is_authorized() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    return !refresh_token_.empty() || !access_token_.empty();
+    if (auth_state_.load() != AuthState::Authorized)
+        return false;
+    if (refresh_token_.empty() || refresh_token_.length() < 10)
+        return false;
+    if (refresh_token_.find("host_") != std::string::npos)
+        return false;
+    return true;
 }
 
 bool GoogleDrive::load_tokens()
@@ -269,7 +281,10 @@ bool GoogleDrive::load_tokens()
     std::lock_guard<std::mutex> lock(mutex_);
     std::FILE *file = std::fopen(kClientAuthPath, "rb");
     if (!file)
+    {
+        auth_state_.store(AuthState::Unauthenticated);
         return false;
+    }
 
     std::fseek(file, 0, SEEK_END);
     const long file_size = std::ftell(file);
@@ -278,6 +293,7 @@ bool GoogleDrive::load_tokens()
     if (file_size <= 0)
     {
         std::fclose(file);
+        auth_state_.store(AuthState::Unauthenticated);
         return false;
     }
 
@@ -291,11 +307,24 @@ bool GoogleDrive::load_tokens()
     refresh_token_ = extract_json_string(content, "refresh_token");
     root_folder_id_ = extract_json_string(content, "root_folder_id");
 
+    // Descartar tokens de prueba o corruptos
+    if (refresh_token_.find("host_") != std::string::npos || refresh_token_.length() < 10)
+    {
+        refresh_token_.clear();
+        access_token_.clear();
+        root_folder_id_.clear();
+        auth_state_.store(AuthState::Unauthenticated);
+        std::remove(kClientAuthPath);
+        return false;
+    }
+
     if (!refresh_token_.empty())
     {
         auth_state_.store(AuthState::Authorized);
         return true;
     }
+
+    auth_state_.store(AuthState::Unauthenticated);
     return false;
 }
 

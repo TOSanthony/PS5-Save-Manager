@@ -209,14 +209,23 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
         return res;
     }
 
-    const std::string backup_game_folder =
+    // Buscar carpeta de respaldo existente (soporta coincidencia exacta o con nombre del juego)
+    std::string backup_game_folder =
         source_device.root_dir + "/" + game.title_id + " - " + sanitize_name(game.title);
 
     if (access(backup_game_folder.c_str(), F_OK) != 0)
     {
+        // Probar si solo tiene el title_id
+        std::string fallback_folder = source_device.root_dir + "/" + game.title_id;
+        if (access(fallback_folder.c_str(), F_OK) == 0)
+            backup_game_folder = fallback_folder;
+    }
+
+    if (access(backup_game_folder.c_str(), F_OK) != 0)
+    {
         res.success = false;
-        res.message = is_es ? ("No se encontro respaldo previo en " + backup_game_folder)
-                            : ("No previous backup found at " + backup_game_folder);
+        res.message = is_es ? ("No se encontro respaldo previo en " + source_device.label)
+                            : ("No previous backup found on " + source_device.label);
         return res;
     }
 
@@ -240,7 +249,7 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
     int files_count = 0;
     std::uint64_t bytes_copied = 0;
     const bool ok = copy_directory_recursive(backup_game_folder, dst_target, files_count,
-                                            bytes_copied);
+                                             bytes_copied);
 
     // Sincronizar buffers de disco y vnodes
     sync();
@@ -256,6 +265,187 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
                              " archivos) con Keystone preservado")
                           : ("Restore successful (" + std::to_string(files_count) +
                              " files) with Keystone preserved");
+    }
+    else
+    {
+        res.message = is_es ? ("Fallo al restaurar archivos en " + game.save_path)
+                            : ("Failed to restore files at " + game.save_path);
+    }
+
+    return res;
+}
+
+std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
+                                              const std::vector<storage::StorageDevice> &devices)
+{
+    std::vector<BackupItem> backups;
+    const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+
+    for (const auto &dev : devices)
+    {
+        if (!dev.connected || dev.type == storage::StorageType::Cloud)
+            continue;
+
+        if (dev.root_dir.empty() || access(dev.root_dir.c_str(), F_OK) != 0)
+            continue;
+
+        DIR *dir = opendir(dev.root_dir.c_str());
+        if (!dir)
+            continue;
+
+        while (const dirent *entry = readdir(dir))
+        {
+            if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0)
+                continue;
+
+            std::string entry_name = entry->d_name;
+            if (entry_name.rfind(game.title_id, 0) != 0)
+                continue;
+
+            std::string full_path = dev.root_dir + "/" + entry_name;
+            struct stat st{};
+            if (stat(full_path.c_str(), &st) != 0 || !S_ISDIR(st.st_mode))
+                continue;
+
+            BackupItem item;
+            item.device_id = dev.id;
+            item.device_label = dev.label;
+            item.storage_type = dev.type;
+            item.folder_path = full_path;
+            item.folder_name = entry_name;
+            item.title_id = game.title_id;
+            item.title = game.title;
+
+            std::tm *tm_info = std::localtime(&st.st_mtime);
+            if (tm_info)
+            {
+                char time_buf[64];
+                std::strftime(time_buf, sizeof(time_buf), "%d/%m/%Y, %I:%M %p", tm_info);
+                item.timestamp_str = time_buf;
+            }
+            else
+            {
+                item.timestamp_str = is_es ? "Fecha desconocida" : "Unknown date";
+            }
+
+            int files = 0;
+            std::uint64_t total_size = 0;
+            bool keystone_found = false;
+
+            DIR *sub = opendir(full_path.c_str());
+            if (sub)
+            {
+                while (const dirent *se = readdir(sub))
+                {
+                    if (std::strcmp(se->d_name, ".") == 0 || std::strcmp(se->d_name, "..") == 0)
+                        continue;
+                    std::string sp = full_path + "/" + se->d_name;
+                    struct stat sst{};
+                    if (stat(sp.c_str(), &sst) == 0)
+                    {
+                        if (S_ISREG(sst.st_mode))
+                        {
+                            files++;
+                            total_size += static_cast<std::uint64_t>(sst.st_size);
+                        }
+                        else if (S_ISDIR(sst.st_mode))
+                        {
+                            DIR *sub2 = opendir(sp.c_str());
+                            if (sub2)
+                            {
+                                while (const dirent *se2 = readdir(sub2))
+                                {
+                                    if (std::strcmp(se2->d_name, ".") == 0 || std::strcmp(se2->d_name, "..") == 0)
+                                        continue;
+                                    std::string sp2 = sp + "/" + se2->d_name;
+                                    struct stat sst2{};
+                                    if (stat(sp2.c_str(), &sst2) == 0 && S_ISREG(sst2.st_mode))
+                                    {
+                                        files++;
+                                        total_size += static_cast<std::uint64_t>(sst2.st_size);
+                                        if (std::strcmp(se2->d_name, "keystone") == 0)
+                                            keystone_found = true;
+                                    }
+                                }
+                                closedir(sub2);
+                            }
+                        }
+                    }
+                }
+                closedir(sub);
+            }
+
+            item.file_count = files;
+            item.total_bytes = total_size;
+            item.has_keystone = keystone_found;
+
+            const double mb = static_cast<double>(total_size) / (1024.0 * 1024.0);
+            char size_buf[32];
+            if (mb >= 1024.0)
+                std::snprintf(size_buf, sizeof(size_buf), "%.1f GB", mb / 1024.0);
+            else if (mb >= 0.1)
+                std::snprintf(size_buf, sizeof(size_buf), "%.1f MB", mb);
+            else
+                std::snprintf(size_buf, sizeof(size_buf), "%llu bytes", static_cast<unsigned long long>(total_size));
+            item.size_str = size_buf;
+
+            backups.push_back(item);
+        }
+        closedir(dir);
+    }
+
+    return backups;
+}
+
+OperationResult restore_backup_item(const scanner::ScannedGame &game,
+                                    const BackupItem &backup)
+{
+    OperationResult res;
+    const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+
+    if (access(backup.folder_path.c_str(), F_OK) != 0)
+    {
+        res.success = false;
+        res.message = is_es ? ("No se encontro la carpeta de respaldo: " + backup.folder_path)
+                            : ("Backup folder not found: " + backup.folder_path);
+        return res;
+    }
+
+    if (game.save_path.empty())
+    {
+        res.success = false;
+        res.message = is_es ? "Ruta de guardado del juego no localizada en la consola"
+                            : "Game save path not located on console";
+        return res;
+    }
+
+    std::string dst_target = game.save_path;
+    struct stat save_st{};
+    if (stat(game.save_path.c_str(), &save_st) == 0 && S_ISREG(save_st.st_mode))
+    {
+        std::size_t slash = game.save_path.find_last_of('/');
+        if (slash != std::string::npos)
+            dst_target = game.save_path.substr(0, slash);
+    }
+
+    int files_count = 0;
+    std::uint64_t bytes_copied = 0;
+    const bool ok = copy_directory_recursive(backup.folder_path, dst_target, files_count, bytes_copied);
+
+    // Sincronizar buffers de disco y vnodes
+    sync();
+
+    res.success = ok;
+    res.files_transferred = files_count;
+    res.bytes_transferred = bytes_copied;
+
+    if (ok)
+    {
+        res.message = is_es
+                          ? ("Restauracion exitosa (" + std::to_string(files_count) +
+                             " archivos, " + backup.size_str + ") desde " + backup.device_label)
+                          : ("Restore successful (" + std::to_string(files_count) +
+                             " files, " + backup.size_str + ") from " + backup.device_label);
     }
     else
     {
