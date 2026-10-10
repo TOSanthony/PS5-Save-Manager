@@ -279,14 +279,7 @@ int main()
     std::int64_t last_frame_start = sys::monotonic_us();
     for (;;)
     {
-        if (frames < 10)
-        {
-            char crumb[64];
-            std::snprintf(crumb, sizeof(crumb), "main loop: starting frame %llu",
-                          static_cast<unsigned long long>(frames));
-            MACHETE_BREADCRUMB(crumb);
-        }
-
+        char crumb[64];
         const std::int64_t now = sys::monotonic_us();
         // Animation time is start-to-start (one full frame), not the gap
         // between the previous swap returning and this frame beginning.
@@ -294,27 +287,21 @@ int main()
         last_frame_start = now;
         if (dt > 0.05f)
             dt = 0.05f; // a hitch must not teleport the animations
+
+        std::snprintf(crumb, sizeof(crumb), "frame %llu: pad.read",
+                      static_cast<unsigned long long>(frames));
+        MACHETE_BREADCRUMB(crumb);
         const std::size_t count = pad.read(samples);
         InputFrame input = tracker.update(std::span<const PadSample>(samples, count),
                                           static_cast<std::uint64_t>(now));
         if (tour)
             input = tour->step(dt);
 
-        if (frames < 10)
-        {
-            char crumb[64];
-            std::snprintf(crumb, sizeof(crumb), "frame %llu: shell.update",
-                          static_cast<unsigned long long>(frames));
-            MACHETE_BREADCRUMB(crumb);
-        }
+        std::snprintf(crumb, sizeof(crumb), "frame %llu: shell.update",
+                      static_cast<unsigned long long>(frames));
+        MACHETE_BREADCRUMB(crumb);
         shell.update(input, dt);
-        if (frames < 10)
-        {
-            char crumb[64];
-            std::snprintf(crumb, sizeof(crumb), "frame %llu: shell.update completed",
-                          static_cast<unsigned long long>(frames));
-            MACHETE_BREADCRUMB(crumb);
-        }
+
         if (shell.take_settings_changed())
         {
             const Settings &settings = shell.settings();
@@ -345,39 +332,20 @@ int main()
         }
         music.pump(dt);
 
-        if (frames < 10)
-        {
-            char crumb[64];
-            std::snprintf(crumb, sizeof(crumb), "frame %llu: shell.compose",
-                          static_cast<unsigned long long>(frames));
-            MACHETE_BREADCRUMB(crumb);
-        }
+        std::snprintf(crumb, sizeof(crumb), "frame %llu: shell.compose",
+                      static_cast<unsigned long long>(frames));
+        MACHETE_BREADCRUMB(crumb);
         shell.compose(renderer);
-        if (frames < 10)
-        {
-            char crumb[64];
-            std::snprintf(crumb, sizeof(crumb), "frame %llu: shell.compose completed",
-                          static_cast<unsigned long long>(frames));
-            MACHETE_BREADCRUMB(crumb);
-        }
+
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-        if (frames < 10)
-        {
-            char crumb[64];
-            std::snprintf(crumb, sizeof(crumb), "frame %llu: renderer.present",
-                          static_cast<unsigned long long>(frames));
-            MACHETE_BREADCRUMB(crumb);
-        }
+
+        std::snprintf(crumb, sizeof(crumb), "frame %llu: renderer.present",
+                      static_cast<unsigned long long>(frames));
+        MACHETE_BREADCRUMB(crumb);
         renderer.present(0, display.width(), display.height());
-        if (frames < 10)
-        {
-            char crumb[64];
-            std::snprintf(crumb, sizeof(crumb), "frame %llu: renderer.present completed",
-                          static_cast<unsigned long long>(frames));
-            MACHETE_BREADCRUMB(crumb);
-        }
+
         if (tour && !tour->capture().empty())
         {
             // The picture is the same frame drawn once more into a small
@@ -397,13 +365,10 @@ int main()
             tour->capture_done();
             last_frame_start = sys::monotonic_us(); // saving is slow; the frame was not
         }
-        if (frames < 10)
-        {
-            char crumb[64];
-            std::snprintf(crumb, sizeof(crumb), "frame %llu: display.swap",
-                          static_cast<unsigned long long>(frames));
-            MACHETE_BREADCRUMB(crumb);
-        }
+
+        std::snprintf(crumb, sizeof(crumb), "frame %llu: display.swap",
+                      static_cast<unsigned long long>(frames));
+        MACHETE_BREADCRUMB(crumb);
         if (!display.swap())
         {
             MACHETE_LOG("[FATAL]", "display.swap failed on frame %llu: %s",
@@ -414,13 +379,10 @@ int main()
                      ps5::egl_error_name(display.last_error()));
             sys::park();
         }
-        if (frames < 10)
-        {
-            char crumb[64];
-            std::snprintf(crumb, sizeof(crumb), "frame %llu: display.swap completed",
-                          static_cast<unsigned long long>(frames));
-            MACHETE_BREADCRUMB(crumb);
-        }
+
+        std::snprintf(crumb, sizeof(crumb), "frame %llu: display.swap completed",
+                      static_cast<unsigned long long>(frames));
+        MACHETE_BREADCRUMB(crumb);
         ++frames;
         const std::int64_t presented = sys::monotonic_us();
         const float frame_ms = static_cast<float>(presented - previous) / 1000.0f;

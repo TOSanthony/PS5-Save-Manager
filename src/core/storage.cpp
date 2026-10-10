@@ -9,8 +9,8 @@
 #include <cerrno>
 #include <cstdio>
 #include <dirent.h>
+#include <sys/mount.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
 #include <unistd.h>
 
 namespace machete::storage
@@ -31,6 +31,17 @@ std::string sanitize_folder_name(std::string name)
 }
 
 std::uint64_t previous_usb_mask = 0;
+
+bool is_mount_point(const char *path)
+{
+    struct stat st_path{};
+    struct stat st_parent{};
+    if (stat(path, &st_path) != 0)
+        return false;
+    if (stat("/mnt", &st_parent) != 0)
+        return false;
+    return (st_path.st_dev != st_parent.st_dev);
+}
 
 } // namespace
 
@@ -87,13 +98,7 @@ bool is_storage_available(StorageType type)
     else if (type == StorageType::USB)
         parent_dir = "/mnt/usb0";
 
-    DIR *dir = opendir(parent_dir.c_str());
-    if (dir)
-    {
-        closedir(dir);
-        return true;
-    }
-    return false;
+    return (access(parent_dir.c_str(), F_OK) == 0);
 }
 
 std::vector<StorageDevice> scan_storage_devices()
@@ -108,25 +113,15 @@ std::vector<StorageDevice> scan_storage_devices()
         dev.label = machete::i18n::tr(machete::i18n::StringId::StorageInternal);
         dev.mount_path = "/data";
         dev.root_dir = "/data/" + std::string(ROOT_DIR_NAME);
-
-        DIR *dir = opendir("/data");
-        if (dir)
-        {
-            closedir(dir);
-            dev.connected = true;
-        }
-        else if (access("/data", F_OK) == 0)
-        {
-            dev.connected = true;
-        }
+        dev.connected = (access("/data", F_OK) == 0);
 
         if (dev.connected)
         {
-            struct statvfs vfs;
-            if (statvfs("/data", &vfs) == 0)
+            struct statfs fs{};
+            if (statfs("/data", &fs) == 0)
             {
-                dev.free_bytes = static_cast<std::uint64_t>(vfs.f_bavail) * vfs.f_frsize;
-                dev.total_bytes = static_cast<std::uint64_t>(vfs.f_blocks) * vfs.f_frsize;
+                dev.free_bytes = static_cast<std::uint64_t>(fs.f_bavail) * fs.f_bsize;
+                dev.total_bytes = static_cast<std::uint64_t>(fs.f_blocks) * fs.f_bsize;
             }
         }
         devices.push_back(dev);
@@ -134,33 +129,27 @@ std::vector<StorageDevice> scan_storage_devices()
 
     // 2. SSD de Expansión M.2 (/mnt/ext1 o /mnt/ext0)
     {
-        StorageDevice dev;
-        dev.type = StorageType::SSD;
-        dev.id = "ssd_ext1";
-        dev.label = machete::i18n::tr(machete::i18n::StringId::StorageM2);
-        dev.mount_path = "/mnt/ext1";
-        dev.root_dir = "/mnt/ext1/" + std::string(ROOT_DIR_NAME);
+        std::string ssd_path;
+        if (access("/mnt/ext1", F_OK) == 0 && is_mount_point("/mnt/ext1"))
+            ssd_path = "/mnt/ext1";
+        else if (access("/mnt/ext0", F_OK) == 0 && is_mount_point("/mnt/ext0"))
+            ssd_path = "/mnt/ext0";
 
-        DIR *dir = opendir("/mnt/ext1");
-        if (!dir)
+        if (!ssd_path.empty())
         {
-            dir = opendir("/mnt/ext0");
-            if (dir)
-            {
-                dev.mount_path = "/mnt/ext0";
-                dev.root_dir = "/mnt/ext0/" + std::string(ROOT_DIR_NAME);
-            }
-        }
-
-        if (dir)
-        {
-            closedir(dir);
+            StorageDevice dev;
+            dev.type = StorageType::SSD;
+            dev.id = "ssd_ext1";
+            dev.label = machete::i18n::tr(machete::i18n::StringId::StorageM2);
+            dev.mount_path = ssd_path;
+            dev.root_dir = ssd_path + "/" + ROOT_DIR_NAME;
             dev.connected = true;
-            struct statvfs vfs;
-            if (statvfs(dev.mount_path.c_str(), &vfs) == 0)
+
+            struct statfs fs{};
+            if (statfs(ssd_path.c_str(), &fs) == 0)
             {
-                dev.free_bytes = static_cast<std::uint64_t>(vfs.f_bavail) * vfs.f_frsize;
-                dev.total_bytes = static_cast<std::uint64_t>(vfs.f_blocks) * vfs.f_frsize;
+                dev.free_bytes = static_cast<std::uint64_t>(fs.f_bavail) * fs.f_bsize;
+                dev.total_bytes = static_cast<std::uint64_t>(fs.f_blocks) * fs.f_bsize;
             }
             devices.push_back(dev);
         }
@@ -172,10 +161,8 @@ std::vector<StorageDevice> scan_storage_devices()
         char usb_path[32];
         std::snprintf(usb_path, sizeof(usb_path), "/mnt/usb%d", i);
 
-        DIR *dir = opendir(usb_path);
-        if (dir)
+        if (access(usb_path, F_OK) == 0 && is_mount_point(usb_path))
         {
-            closedir(dir);
             StorageDevice dev;
             dev.type = StorageType::USB;
             dev.id = "usb" + std::to_string(i);
@@ -188,11 +175,11 @@ std::vector<StorageDevice> scan_storage_devices()
             dev.root_dir = std::string(usb_path) + "/" + ROOT_DIR_NAME;
             dev.connected = true;
 
-            struct statvfs vfs;
-            if (statvfs(usb_path, &vfs) == 0)
+            struct statfs fs{};
+            if (statfs(usb_path, &fs) == 0)
             {
-                dev.free_bytes = static_cast<std::uint64_t>(vfs.f_bavail) * vfs.f_frsize;
-                dev.total_bytes = static_cast<std::uint64_t>(vfs.f_blocks) * vfs.f_frsize;
+                dev.free_bytes = static_cast<std::uint64_t>(fs.f_bavail) * fs.f_bsize;
+                dev.total_bytes = static_cast<std::uint64_t>(fs.f_blocks) * fs.f_bsize;
             }
             devices.push_back(dev);
         }
@@ -215,19 +202,13 @@ std::vector<StorageDevice> scan_storage_devices()
 
 bool poll_storage_changes(std::vector<StorageDevice> &out_devices, std::string &change_description)
 {
-    out_devices = scan_storage_devices();
-
     std::uint64_t current_usb_mask = 0;
-    for (const auto &dev : out_devices)
+    for (int i = 0; i < 8; ++i)
     {
-        if (dev.type == StorageType::USB && dev.id.rfind("usb", 0) == 0 && dev.id.length() > 3)
-        {
-            if (dev.id[3] >= '0' && dev.id[3] <= '7')
-            {
-                int index = dev.id[3] - '0';
-                current_usb_mask |= (1ULL << index);
-            }
-        }
+        char usb_path[32];
+        std::snprintf(usb_path, sizeof(usb_path), "/mnt/usb%d", i);
+        if (access(usb_path, F_OK) == 0 && is_mount_point(usb_path))
+            current_usb_mask |= (1ULL << i);
     }
 
     // Primera ejecución: solo registrar el estado inicial
@@ -241,6 +222,7 @@ bool poll_storage_changes(std::vector<StorageDevice> &out_devices, std::string &
 
     if (current_usb_mask != previous_usb_mask)
     {
+        out_devices = scan_storage_devices();
         for (int i = 0; i < 8; ++i)
         {
             const bool was_on = (previous_usb_mask & (1ULL << i)) != 0;

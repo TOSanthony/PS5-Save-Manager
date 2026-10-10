@@ -13,6 +13,7 @@
 #include <mutex>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/ucontext.h>
 #include <unistd.h>
 
 extern "C"
@@ -61,7 +62,7 @@ void try_open_fd(int &fd_ref, const char *path)
 }
 
 // Manejador de señales fatales (SIGSEGV, SIGBUS, etc.)
-void fatal_signal_handler(int sig, siginfo_t *info, void * /*ucontext*/)
+void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
 {
     const char *sig_name = "UNKNOWN";
     switch (sig)
@@ -75,18 +76,52 @@ void fatal_signal_handler(int sig, siginfo_t *info, void * /*ucontext*/)
     case SIGTRAP: sig_name = "SIGTRAP (Trampa de Depurador / Breakpoint)"; break;
     }
 
-    char crash_msg[512];
+    std::uint64_t rip = 0, rsp = 0, rbp = 0, trapno = 0, err = 0;
+    std::uint64_t rax = 0, rbx = 0, rcx = 0, rdx = 0, rsi = 0, rdi = 0;
+    if (ucontext)
+    {
+        const auto *uc = reinterpret_cast<const ucontext_t *>(ucontext);
+        rip = static_cast<std::uint64_t>(uc->uc_mcontext.mc_rip);
+        rsp = static_cast<std::uint64_t>(uc->uc_mcontext.mc_rsp);
+        rbp = static_cast<std::uint64_t>(uc->uc_mcontext.mc_rbp);
+        trapno = static_cast<std::uint64_t>(uc->uc_mcontext.mc_trapno);
+        err = static_cast<std::uint64_t>(uc->uc_mcontext.mc_err);
+        rax = static_cast<std::uint64_t>(uc->uc_mcontext.mc_rax);
+        rbx = static_cast<std::uint64_t>(uc->uc_mcontext.mc_rbx);
+        rcx = static_cast<std::uint64_t>(uc->uc_mcontext.mc_rcx);
+        rdx = static_cast<std::uint64_t>(uc->uc_mcontext.mc_rdx);
+        rsi = static_cast<std::uint64_t>(uc->uc_mcontext.mc_rsi);
+        rdi = static_cast<std::uint64_t>(uc->uc_mcontext.mc_rdi);
+    }
+
+    char crash_msg[1024];
     std::snprintf(crash_msg, sizeof(crash_msg),
                   "\n"
                   "====================================================\n"
                   "[FATAL CRASH DETECTED]\n"
                   "Senal: %d - %s\n"
-                  "Direccion de memoria fallida: %p\n"
+                  "Direccion de memoria fallida (si_addr): %p\n"
                   "Codigo de senal (si_code): %d\n"
+                  "Registros CPU:\n"
+                  "  RIP: 0x%016llx  RSP: 0x%016llx  RBP: 0x%016llx\n"
+                  "  RAX: 0x%016llx  RBX: 0x%016llx  RCX: 0x%016llx\n"
+                  "  RDX: 0x%016llx  RSI: 0x%016llx  RDI: 0x%016llx\n"
+                  "  Trap: %llu  Err: %llu\n"
                   "Ultima migaja registrada (Breadcrumb): [%s]\n"
                   "PID: %d | UID: %d | GID: %d\n"
                   "====================================================\n\n",
                   sig, sig_name, info ? info->si_addr : nullptr, info ? info->si_code : 0,
+                  static_cast<unsigned long long>(rip),
+                  static_cast<unsigned long long>(rsp),
+                  static_cast<unsigned long long>(rbp),
+                  static_cast<unsigned long long>(rax),
+                  static_cast<unsigned long long>(rbx),
+                  static_cast<unsigned long long>(rcx),
+                  static_cast<unsigned long long>(rdx),
+                  static_cast<unsigned long long>(rsi),
+                  static_cast<unsigned long long>(rdi),
+                  static_cast<unsigned long long>(trapno),
+                  static_cast<unsigned long long>(err),
                   s_current_breadcrumb, static_cast<int>(getpid()),
                   static_cast<int>(getuid()), static_cast<int>(getgid()));
 
@@ -169,7 +204,13 @@ void set_breadcrumb(const char *step)
         s_current_breadcrumb[sizeof(s_current_breadcrumb) - 1] = '\0';
     }
 
-    write("[BREADCRUMB]", "%s", step);
+    if (std::strncmp(step, "frame ", 6) != 0 &&
+        std::strncmp(step, "draw_dashboard: game_card", 25) != 0 &&
+        std::strncmp(step, "gl_batch.draw:", 14) != 0 &&
+        std::strncmp(step, "renderer: play", 14) != 0)
+    {
+        write("[BREADCRUMB]", "%s", step);
+    }
 }
 
 const char *get_breadcrumb()

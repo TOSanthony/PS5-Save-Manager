@@ -15,9 +15,11 @@
 #include <unistd.h>
 #include <unordered_map>
 
-#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
 #include <GL/glcorearb.h>
-#endif
+
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#include "third_party/stb/stb_image.h"
 
 namespace machete::scanner
 {
@@ -496,7 +498,7 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                     if (game.save_path.empty())
                         game.save_path = game_save_item;
 
-                    // Si aun no tenia titulo, buscar en metadatos conocidos
+                    // Si aun no tenia titulo, buscar en metadatos conocidos o en la propia partida
                     if (game.title.empty() || game.title == title_id)
                     {
                         for (const char *base : {"/user/appmeta", "/mnt/ext0/user/appmeta", "/mnt/ext1/user/appmeta", "/data/homebrew"})
@@ -516,9 +518,31 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                                     break;
                             }
                         }
+
+                        if (game.title.empty() || game.title == title_id)
+                        {
+                            for (const std::string &p_save : {
+                                     game_save_item + "/sce_sys/param.sfo",
+                                     game_save_item + "/sce_sys/PARAM.SFO",
+                                     game_save_item + "/param.sfo",
+                                     game_save_item + "/sce_sys/param.json",
+                                     game_save_item + "/param.json",
+                                 })
+                            {
+                                if (file_exists(p_save))
+                                {
+                                    if (p_save.rfind(".json") != std::string::npos)
+                                        game.title = extract_title_from_param_json(p_save);
+                                    else
+                                        game.title = extract_title_from_param_sfo(p_save);
+                                    if (!game.title.empty())
+                                        break;
+                                }
+                            }
+                        }
                     }
 
-                    // Si no tenia icono, buscar en metadatos conocidos
+                    // Si no tenia icono, buscar en metadatos conocidos o en la propia partida
                     if (game.icon_path.empty())
                     {
                         for (const char *base : {"/user/appmeta", "/mnt/ext0/user/appmeta", "/mnt/ext1/user/appmeta", "/data/homebrew"})
@@ -528,6 +552,23 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                             {
                                 game.icon_path = p_ico;
                                 break;
+                            }
+                        }
+
+                        if (game.icon_path.empty())
+                        {
+                            for (const std::string &p_ico : {
+                                     game_save_item + "/sce_sys/icon0.png",
+                                     game_save_item + "/icon0.png",
+                                     game_save_item + "/sce_sys/icon0.PNG",
+                                     game_save_item + "/icon0.PNG",
+                                 })
+                            {
+                                if (file_exists(p_ico))
+                                {
+                                    game.icon_path = p_ico;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -600,16 +641,58 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
 
 void load_game_icon_textures(std::vector<ScannedGame> &games)
 {
-    // Las tarjetas vectoriales procedurales renderizan con elegancia a 60 FPS
-    // sin requerir asignaciones dinámicas en VRAM de AGC
+    MACHETE_BREADCRUMB("load_game_icon_textures: start");
+    std::size_t loaded = 0;
+    // Cargar hasta 16 iconos reales para los juegos prioritarios visibles
+    constexpr std::size_t kMaxIcons = 16;
     for (auto &game : games)
-        game.icon_texture = 0;
+    {
+        if (loaded >= kMaxIcons)
+            break;
+        if (game.icon_texture != 0)
+        {
+            ++loaded;
+            continue;
+        }
+        if (game.icon_path.empty() || !file_exists(game.icon_path))
+            continue;
+
+        int width = 0, height = 0, channels = 0;
+        unsigned char *pixels = stbi_load(game.icon_path.c_str(), &width, &height, &channels, 4);
+        if (!pixels)
+            continue;
+
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        if (tex != 0)
+        {
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+            game.icon_texture = tex;
+            ++loaded;
+        }
+        stbi_image_free(pixels);
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+    MACHETE_LOG("[SCANNER]", "Texturas de iconos reales cargadas: %zu", loaded);
+    MACHETE_BREADCRUMB("load_game_icon_textures: done");
 }
 
 void release_game_icon_textures(std::vector<ScannedGame> &games)
 {
     for (auto &game : games)
-        game.icon_texture = 0;
+    {
+        if (game.icon_texture != 0)
+        {
+            glDeleteTextures(1, &game.icon_texture);
+            game.icon_texture = 0;
+        }
+    }
 }
 
 } // namespace machete::scanner

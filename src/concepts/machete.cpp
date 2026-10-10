@@ -217,10 +217,11 @@ class Machete final : public app::Concept
 
         // Sondeo periódico en segundo plano de inserción/extracción USB
         storage_poll_timer_ += dt;
-        if (storage_poll_timer_ >= 1.2f)
+        if (storage_poll_timer_ >= 5.0f)
         {
             storage_poll_timer_ = 0.0f;
             std::string hotplug_msg;
+            MACHETE_BREADCRUMB("machete: poll_storage_changes");
             if (machete::storage::poll_storage_changes(active_devices_, hotplug_msg))
             {
                 std::snprintf(notification_text_, sizeof(notification_text_), "%s",
@@ -233,6 +234,7 @@ class Machete final : public app::Concept
         // Notificación de elevación de privilegios completada en segundo plano
         if (jb_needs_refresh_.exchange(false))
         {
+            MACHETE_BREADCRUMB("machete: jb_needs_refresh");
             machete::jailbreak::clean_shadowmount_interference();
             refresh_games();
             const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
@@ -243,26 +245,30 @@ class Machete final : public app::Concept
             feedback.play(audio::Cue::welcome, 1.0f, 0.0f);
         }
 
-        // Sondeo periódico no bloqueante de privilegios
-        jb_poll_timer_ += dt;
-        if (jb_poll_timer_ >= 3.0f)
+        // Sondeo periódico no bloqueante de privilegios (solo si aún no somos root)
+        if (!root_active_.load())
         {
-            jb_poll_timer_ = 0.0f;
-            if (!root_active_.load() && !jb_thread_running_.load())
+            jb_poll_timer_ += dt;
+            if (jb_poll_timer_ >= 3.0f)
             {
-                const auto current = machete::jailbreak::check_status();
-                if (current.root_access)
+                jb_poll_timer_ = 0.0f;
+                if (!jb_thread_running_.load())
                 {
+                    MACHETE_BREADCRUMB("machete: check_status poll");
+                    const auto current = machete::jailbreak::check_status();
+                    if (current.root_access)
                     {
-                        std::lock_guard<std::mutex> lock(jb_mutex_);
-                        jb_info_ = current;
+                        {
+                            std::lock_guard<std::mutex> lock(jb_mutex_);
+                            jb_info_ = current;
+                        }
+                        root_active_.store(true);
+                        refresh_games();
+                        notification_timer_ = 4.0f;
+                        std::snprintf(notification_text_, sizeof(notification_text_), "%s",
+                                      machete::i18n::tr(machete::i18n::StringId::ToastJailbreakGranted));
+                        feedback.play(audio::Cue::welcome, 1.0f, 0.0f);
                     }
-                    root_active_.store(true);
-                    refresh_games();
-                    notification_timer_ = 4.0f;
-                    std::snprintf(notification_text_, sizeof(notification_text_), "%s",
-                                  machete::i18n::tr(machete::i18n::StringId::ToastJailbreakGranted));
-                    feedback.play(audio::Cue::welcome, 1.0f, 0.0f);
                 }
             }
         }
