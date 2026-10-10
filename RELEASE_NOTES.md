@@ -1,5 +1,7 @@
 # Release Notes: MacheteSVG v1.0.0 / Notas de la Versión v1.0.0
 
+![MacheteSVG Banner](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/banner.png)
+
 ---
 
 ## English Documentation
@@ -11,12 +13,25 @@ Built with a hardware-accelerated OpenGL 4.6 SDF renderer, MacheteSVG delivers a
 
 ---
 
+### Visual Interface & Real Hardware Captures
+
+| English Dashboard (1080p Render) | PS5 Hardware Capture (Real Console) |
+| :---: | :---: |
+| ![English Dashboard](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/dashboard_english_1080p.png) | ![Real Hardware Dashboard](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/ps5_real_hardware_dashboard.png) |
+
+| Google Drive RFC 8628 Device Flow | Modal Location Selector (Real Console) |
+| :---: | :---: |
+| ![Google Drive Dialog](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/google_drive_dialog_1080p.png) | ![Real Hardware Modal](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/ps5_real_hardware_modal.png) |
+
+---
+
 ### Key Capabilities
 
 #### 1. Zero-Corruption Save Architecture
 - **Keystone File Preservation:** Preserves console-specific `sce_sys/keystone` and `sce_sys/param.sfo` files during restoration. Only save payload containers (e.g., `data000.bin`) are updated, allowing clean auto-resigning of saves downloaded from other users or consoles.
 - **Error CE-108255-1 Elimination:** Employs orderly `sceSaveDataUmount` operations, allowing the Prospero kernel to seal PFS containers cleanly.
 - **Global vnode Flush:** Enforces atomic writes followed by `sync()` / `fsync()`, invalidating FreeBSD vnode caches so backwards-compatible PS4 games reload modified saves immediately without console restarts.
+- **Dummy Save Safeguard:** Prompts users to run newly installed games once before restoring saves to generate genuine local hardware keys.
 
 #### 2. Google Drive Cloud Synchronization
 - **OAuth 2.0 Device Flow (RFC 8628):** Link your Google account securely without entering credentials on the console. Simply navigate to `https://www.google.com/device` and enter the code shown on screen.
@@ -71,12 +86,25 @@ Desarrollado con renderizado acelerado por hardware OpenGL 4.6 SDF, MacheteSVG o
 
 ---
 
+### Capturas de Pantalla y Hardware Real
+
+| Panel Principal en Inglés (Render 1080p) | Captura de Hardware Real en PS5 |
+| :---: | :---: |
+| ![Panel en Inglés](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/dashboard_english_1080p.png) | ![Panel en Consola Real](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/ps5_real_hardware_dashboard.png) |
+
+| Autorización Google Drive RFC 8628 | Selector Modal de Ubicación (Consola Real) |
+| :---: | :---: |
+| ![Autorización Google Drive](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/google_drive_dialog_1080p.png) | ![Selector Modal](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/ps5_real_hardware_modal.png) |
+
+---
+
 ### Capacidades Principales
 
 #### 1. Arquitectura de Guardado con Cero Corrupción
 - **Preservación del Archivo Keystone:** Mantiene intactos los archivos de consola `sce_sys/keystone` y `sce_sys/param.sfo` durante la restauración. Solo se actualiza el contenedor de datos (`data000.bin`), permitiendo resignar partidas descargadas de otros usuarios sin rechazo del sistema.
 - **Eliminación del Error CE-108255-1:** Realiza un desmontaje ordenado mediante `sceSaveDataUmount`, permitiendo que el kernel de Prospero selle los contenedores PFS de forma limpia.
 - **Vaciado de Caché vnode:** Aplica escrituras atómicas junto con `sync()` / `fsync()`, invalidando las cachés de vnodes de FreeBSD para que los juegos de PS4 en retrocompatibilidad carguen las partidas de inmediato sin reiniciar la consola.
+- **Protección de Partida Base:** Avisa al usuario para iniciar una vez cualquier juego nuevo y generar las claves criptográficas locales legítimas.
 
 #### 2. Sincronización en la Nube con Google Drive
 - **OAuth 2.0 Device Flow (RFC 8628):** Vincula tu cuenta de Google de forma segura sin ingresar contraseñas en la consola. Ingresa a `https://www.google.com/device` e introduce el código que se muestra en pantalla.
