@@ -57,14 +57,58 @@ std::string format_timestamp(std::time_t mtime)
     return std::string(buf);
 }
 
-std::uint64_t calculate_dir_size_and_mtime(const std::string &path, std::time_t &out_mtime)
+bool is_valid_title_id(const std::string &id)
 {
-    std::uint64_t total = 0;
-    out_mtime = 0;
+    if (id.size() < 9)
+        return false;
+    if (id.rfind("CUSA", 0) != 0 && id.rfind("PPSA", 0) != 0 && id.rfind("PPCX", 0) != 0)
+        return false;
+    for (std::size_t i = 4; i < 9; ++i)
+    {
+        if (id[i] < '0' || id[i] > '9')
+            return false;
+    }
+    return true;
+}
+
+bool is_valid_png_file(const std::string &path)
+{
+    std::FILE *f = std::fopen(path.c_str(), "rb");
+    if (!f)
+        return false;
+    std::uint8_t header[8] = {};
+    const std::size_t n = std::fread(header, 1, 8, f);
+    std::fclose(f);
+    if (n < 8)
+        return false;
+    return (header[0] == 0x89 && header[1] == 'P' && header[2] == 'N' && header[3] == 'G' &&
+            header[4] == 0x0D && header[5] == 0x0A && header[6] == 0x1A && header[7] == 0x0A);
+}
+
+std::uint64_t calculate_dir_size_and_mtime(const std::string &path, std::time_t &out_mtime, int depth = 0)
+{
+    if (depth > 2)
+        return 0;
+
+    struct stat st{};
+    if (lstat(path.c_str(), &st) != 0)
+        return 0;
+
+    if (S_ISREG(st.st_mode))
+    {
+        out_mtime = st.st_mtime;
+        return static_cast<std::uint64_t>(st.st_size);
+    }
+
+    if (!S_ISDIR(st.st_mode) || S_ISLNK(st.st_mode))
+        return 0;
 
     DIR *dir = opendir(path.c_str());
     if (!dir)
         return 0;
+
+    std::uint64_t total = 0;
+    out_mtime = st.st_mtime;
 
     while (const dirent *entry = readdir(dir))
     {
@@ -72,21 +116,21 @@ std::uint64_t calculate_dir_size_and_mtime(const std::string &path, std::time_t 
             continue;
 
         const std::string full = path + "/" + entry->d_name;
-        struct stat st;
-        if (stat(full.c_str(), &st) == 0)
+        struct stat entry_st{};
+        if (lstat(full.c_str(), &entry_st) == 0)
         {
-            if (S_ISDIR(st.st_mode))
+            if (S_ISDIR(entry_st.st_mode) && !S_ISLNK(entry_st.st_mode))
             {
                 std::time_t sub_mtime = 0;
-                total += calculate_dir_size_and_mtime(full, sub_mtime);
+                total += calculate_dir_size_and_mtime(full, sub_mtime, depth + 1);
                 if (sub_mtime > out_mtime)
                     out_mtime = sub_mtime;
             }
-            else
+            else if (S_ISREG(entry_st.st_mode))
             {
-                total += static_cast<std::uint64_t>(st.st_size);
-                if (st.st_mtime > out_mtime)
-                    out_mtime = st.st_mtime;
+                total += static_cast<std::uint64_t>(entry_st.st_size);
+                if (entry_st.st_mtime > out_mtime)
+                    out_mtime = entry_st.st_mtime;
             }
         }
     }
@@ -121,6 +165,11 @@ std::string extract_title_from_param_json(const std::string &param_path)
     const std::size_t read_bytes = std::fread(content.data(), 1, static_cast<std::size_t>(size), file);
     std::fclose(file);
     content.resize(read_bytes);
+
+    // Validar que el archivo contenga texto JSON estructurado con llave de apertura '{'
+    const auto first_char = content.find_first_not_of(" \t\r\n");
+    if (first_char == std::string::npos || content[first_char] != '{')
+        return "";
 
     // 1. Intentar buscar "titleName": "..."
     for (const char *key : {"\"titleName\"", "\"title\""})
@@ -249,16 +298,13 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     };
 
     // =========================================================================
-    // 1. Escanear Aplicaciones Instaladas
+    // 1. Escanear Aplicaciones Instaladas Reales
     // =========================================================================
     const char *app_bases[] = {
         "/user/app",
-        "/system_ex/app",
-        "/mnt/ext0/user/app",
-        "/mnt/ext0/app",
-        "/mnt/ext1/user/app",
-        "/mnt/ext1/app",
         "/data/homebrew",
+        "/mnt/ext0/user/app",
+        "/mnt/ext1/user/app",
     };
 
     for (const char *app_base : app_bases)
@@ -273,19 +319,21 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                 continue;
 
             const std::string title_id = entry->d_name;
+            if (!is_valid_title_id(title_id))
+                continue;
+
             const std::string app_path = std::string(app_base) + "/" + title_id;
 
             auto &game = find_or_add_game(title_id);
             game.app_path = app_path;
 
-            // Buscar icon0.png en rutas oficiales
+            // Buscar icon0.png en rutas estándar accesibles
             if (game.icon_path.empty())
             {
                 for (const std::string &p : {
                          app_path + "/sce_sys/icon0.png",
                          app_path + "/icon0.png",
                          std::string("/user/appmeta/") + title_id + "/icon0.png",
-                         std::string("/system_data/priv/appmeta/") + title_id + "/icon0.png",
                      })
                 {
                     if (file_exists(p))
@@ -307,8 +355,6 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                     game.title = extract_title_from_param_sfo(app_path + "/sce_sys/PARAM.SFO");
                 if (game.title.empty() && file_exists(std::string("/user/appmeta/") + title_id + "/param.json"))
                     game.title = extract_title_from_param_json(std::string("/user/appmeta/") + title_id + "/param.json");
-                if (game.title.empty() && file_exists(std::string("/system_data/priv/appmeta/") + title_id + "/param.json"))
-                    game.title = extract_title_from_param_json(std::string("/system_data/priv/appmeta/") + title_id + "/param.json");
             }
 
             if (game.size_str.empty())
@@ -350,8 +396,14 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                     if (game_entry->d_name[0] == '.')
                         continue;
 
-                    const std::string title_id = game_entry->d_name;
-                    const std::string game_save_folder = savedata_path + "/" + title_id;
+                    std::string title_id = game_entry->d_name;
+                    if (title_id.ends_with(".bin"))
+                        title_id = title_id.substr(0, title_id.size() - 4);
+
+                    if (!is_valid_title_id(title_id))
+                        continue;
+
+                    const std::string game_save_folder = savedata_path + "/" + game_entry->d_name;
 
                     auto &game = find_or_add_game(title_id);
                     game.save_path = game_save_folder;
@@ -363,7 +415,6 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                                  game_save_folder + "/sce_sys/icon0.png",
                                  game_save_folder + "/icon0.png",
                                  std::string("/user/appmeta/") + title_id + "/icon0.png",
-                                 std::string("/system_data/priv/appmeta/") + title_id + "/icon0.png",
                              })
                         {
                             if (file_exists(p))
@@ -430,9 +481,17 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
 void load_game_icon_textures(std::vector<ScannedGame> &games)
 {
 #if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+    // Cargar únicamente texturas de PNGs válidos no cifrados, limitando la cantidad para no saturar memoria AGC
+    std::size_t loaded_count = 0;
     for (auto &game : games)
     {
+        if (loaded_count >= 8)
+            break;
+
         if (game.icon_texture != 0 || game.icon_path.empty())
+            continue;
+
+        if (!is_valid_png_file(game.icon_path))
             continue;
 
         int width = 0;
@@ -442,9 +501,16 @@ void load_game_icon_textures(std::vector<ScannedGame> &games)
         if (!data)
             continue;
 
+        if (width <= 0 || width > 512 || height <= 0 || height > 512)
+        {
+            stbi_image_free(data);
+            continue;
+        }
+
         GLuint tex = 0;
         glGenTextures(1, &tex);
         glBindTexture(GL_TEXTURE_2D, tex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -454,6 +520,7 @@ void load_game_icon_textures(std::vector<ScannedGame> &games)
 
         stbi_image_free(data);
         game.icon_texture = static_cast<unsigned int>(tex);
+        loaded_count++;
     }
 #else
     unsigned int mock_id = 100;

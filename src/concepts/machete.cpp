@@ -170,9 +170,16 @@ class Machete final : public app::Concept
         games_ = machete::scanner::scan_installed_games_and_saves();
         machete::scanner::load_game_icon_textures(games_);
 
-        if (selected_game_ >= static_cast<int>(games_.size()))
-            selected_game_ = std::max(0, static_cast<int>(games_.size()) - 1);
-        adjust_scroll();
+        if (games_.empty())
+        {
+            selected_game_ = 0;
+            scroll_offset_ = 0;
+        }
+        else
+        {
+            selected_game_ = std::clamp(selected_game_, 0, static_cast<int>(games_.size()) - 1);
+            adjust_scroll();
+        }
     }
 
     void update(const InputFrame &input, float dt, app::Feedback &feedback) override

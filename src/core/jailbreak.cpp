@@ -126,6 +126,82 @@ bool publish_atomic_request(const char *target_path, int pid) noexcept
     return ok;
 }
 
+void ensure_etahen_whitelist() noexcept
+{
+    // Asegurar Title ID en archivos de lista blanca leídos por etaHEN
+    const char *whitelist_files[] = {
+        "/data/whitelist.txt",
+        "/data/etaHEN/whitelist.txt",
+    };
+
+    for (const char *path : whitelist_files)
+    {
+        bool found = false;
+        std::FILE *f = std::fopen(path, "r");
+        if (f)
+        {
+            char line[128];
+            while (std::fgets(line, sizeof(line), f))
+            {
+                if (std::strstr(line, "PPSA99001") != nullptr)
+                {
+                    found = true;
+                    break;
+                }
+            }
+            std::fclose(f);
+        }
+        if (!found)
+        {
+            std::FILE *out = std::fopen(path, "a");
+            if (out)
+            {
+                std::fputs("PPSA99001\n", out);
+                std::fclose(out);
+                (void)chmod(path, 0666);
+            }
+        }
+    }
+
+    // Asegurar registro en /data/etaHEN/config.ini bajo [app_jailbreak]
+    const char *cfg_path = "/data/etaHEN/config.ini";
+    std::FILE *cfg = std::fopen(cfg_path, "r");
+    if (cfg)
+    {
+        std::fseek(cfg, 0, SEEK_END);
+        const long len = std::ftell(cfg);
+        std::fseek(cfg, 0, SEEK_SET);
+        if (len > 0 && len < 65536)
+        {
+            std::string content(static_cast<std::size_t>(len), '\0');
+            const std::size_t r = std::fread(content.data(), 1, static_cast<std::size_t>(len), cfg);
+            std::fclose(cfg);
+            content.resize(r);
+
+            if (content.find("PPSA99001") == std::string::npos)
+            {
+                const std::size_t sec = content.find("[app_jailbreak]");
+                if (sec != std::string::npos)
+                    content.insert(sec + 15, "\nPPSA99001=1");
+                else
+                    content += "\n[app_jailbreak]\nPPSA99001=1\n";
+
+                std::FILE *out = std::fopen(cfg_path, "w");
+                if (out)
+                {
+                    std::fwrite(content.data(), 1, content.size(), out);
+                    std::fclose(out);
+                    (void)chmod(cfg_path, 0666);
+                }
+            }
+        }
+        else
+        {
+            std::fclose(cfg);
+        }
+    }
+}
+
 } // namespace
 
 bool auto_launch_embedded_daemon()
@@ -272,6 +348,7 @@ JailbreakInfo request_jailbreak()
     // 1. Verificación preliminar rápida: si ya tenemos acceso root, retornar de inmediato
     if (verify_root_access(pid))
     {
+        ensure_etahen_whitelist();
         JailbreakInfo info;
         info.pid = pid;
         info.status = JailbreakStatus::Escaped;
@@ -300,6 +377,7 @@ JailbreakInfo request_jailbreak()
 
         if (verify_root_access(pid))
         {
+            ensure_etahen_whitelist();
             info.status = JailbreakStatus::Escaped;
             info.root_access = true;
             info.daemon_type = "Lapy JB Daemon / OnionHEN / etaHEN (Residente)";
@@ -330,6 +408,7 @@ JailbreakInfo request_jailbreak()
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             if (verify_root_access(pid))
             {
+                ensure_etahen_whitelist();
                 info.status = JailbreakStatus::Escaped;
                 info.root_access = true;
                 info.daemon_type = "Lapy JB Daemon / etaHEN";
@@ -366,6 +445,7 @@ JailbreakInfo request_jailbreak()
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             if (verify_root_access(pid))
             {
+                ensure_etahen_whitelist();
                 info.status = JailbreakStatus::Escaped;
                 info.root_access = true;
                 info.status_message =
@@ -386,6 +466,7 @@ JailbreakInfo request_jailbreak()
 
     if (verify_root_access(pid))
     {
+        ensure_etahen_whitelist();
         info.status = JailbreakStatus::Escaped;
         info.root_access = true;
         info.status_message =
