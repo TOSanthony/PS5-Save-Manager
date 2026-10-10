@@ -12,13 +12,11 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <unordered_map>
 
 #if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
 #include <GL/glcorearb.h>
 #endif
-
-#define STB_IMAGE_IMPLEMENTATION
-#include "third_party/stb/stb_image.h"
 
 namespace machete::scanner
 {
@@ -59,30 +57,19 @@ std::string format_timestamp(std::time_t mtime)
 
 bool is_valid_title_id(const std::string &id)
 {
-    if (id.size() < 9)
+    if (id.size() != 9)
         return false;
-    if (id.rfind("CUSA", 0) != 0 && id.rfind("PPSA", 0) != 0 && id.rfind("PPCX", 0) != 0)
-        return false;
+    for (std::size_t i = 0; i < 4; ++i)
+    {
+        if (id[i] < 'A' || id[i] > 'Z')
+            return false;
+    }
     for (std::size_t i = 4; i < 9; ++i)
     {
         if (id[i] < '0' || id[i] > '9')
             return false;
     }
     return true;
-}
-
-bool is_valid_png_file(const std::string &path)
-{
-    std::FILE *f = std::fopen(path.c_str(), "rb");
-    if (!f)
-        return false;
-    std::uint8_t header[8] = {};
-    const std::size_t n = std::fread(header, 1, 8, f);
-    std::fclose(f);
-    if (n < 8)
-        return false;
-    return (header[0] == 0x89 && header[1] == 'P' && header[2] == 'N' && header[3] == 'G' &&
-            header[4] == 0x0D && header[5] == 0x0A && header[6] == 0x1A && header[7] == 0x0A);
 }
 
 std::uint64_t calculate_dir_size_and_mtime(const std::string &path, std::time_t &out_mtime, int depth = 0)
@@ -277,6 +264,7 @@ std::string extract_title_from_param_sfo(const std::string &sfo_path)
 std::vector<ScannedGame> scan_installed_games_and_saves()
 {
     std::vector<ScannedGame> games;
+    std::unordered_map<std::string, std::time_t> latest_mtimes;
 
     auto find_or_add_game = [&](const std::string &title_id) -> ScannedGame &
     {
@@ -298,22 +286,27 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
     };
 
     // =========================================================================
-    // 1. Escanear Aplicaciones Instaladas Reales
+    // 1. Escanear Metadatos de Aplicaciones Instaladas Reales
+    //    En PS5, el directorio canónico de metadatos de títulos instalados es:
+    //    /user/appmeta/ (interno) y /mnt/ext0/user/appmeta / /mnt/ext1/user/appmeta (externo)
     // =========================================================================
-    const char *app_bases[] = {
-        "/user/app",
+    const char *meta_bases[] = {
+        "/user/appmeta",
+        "/mnt/ext0/user/appmeta",
+        "/mnt/ext1/user/appmeta",
         "/data/homebrew",
+        "/user/app",
         "/mnt/ext0/user/app",
         "/mnt/ext1/user/app",
     };
 
-    for (const char *app_base : app_bases)
+    for (const char *meta_base : meta_bases)
     {
-        DIR *app_dir = opendir(app_base);
-        if (!app_dir)
+        DIR *dir = opendir(meta_base);
+        if (!dir)
             continue;
 
-        while (const dirent *entry = readdir(app_dir))
+        while (const dirent *entry = readdir(dir))
         {
             if (entry->d_name[0] == '.')
                 continue;
@@ -322,18 +315,19 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
             if (!is_valid_title_id(title_id))
                 continue;
 
-            const std::string app_path = std::string(app_base) + "/" + title_id;
+            const std::string entry_path = std::string(meta_base) + "/" + title_id;
 
             auto &game = find_or_add_game(title_id);
-            game.app_path = app_path;
+            if (game.app_path.empty())
+                game.app_path = entry_path;
 
-            // Buscar icon0.png en rutas estándar accesibles
+            // Ruta de icono
             if (game.icon_path.empty())
             {
                 for (const std::string &p : {
-                         app_path + "/sce_sys/icon0.png",
-                         app_path + "/icon0.png",
                          std::string("/user/appmeta/") + title_id + "/icon0.png",
+                         entry_path + "/icon0.png",
+                         entry_path + "/sce_sys/icon0.png",
                      })
                 {
                     if (file_exists(p))
@@ -344,17 +338,21 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                 }
             }
 
-            // Buscar título oficial
+            // Nombre oficial del juego
             if (game.title.empty() || game.title == title_id)
             {
-                if (file_exists(app_path + "/sce_sys/param.json"))
-                    game.title = extract_title_from_param_json(app_path + "/sce_sys/param.json");
-                if (game.title.empty() && file_exists(app_path + "/sce_sys/param.sfo"))
-                    game.title = extract_title_from_param_sfo(app_path + "/sce_sys/param.sfo");
-                if (game.title.empty() && file_exists(app_path + "/sce_sys/PARAM.SFO"))
-                    game.title = extract_title_from_param_sfo(app_path + "/sce_sys/PARAM.SFO");
-                if (game.title.empty() && file_exists(std::string("/user/appmeta/") + title_id + "/param.json"))
+                if (file_exists(std::string("/user/appmeta/") + title_id + "/param.json"))
                     game.title = extract_title_from_param_json(std::string("/user/appmeta/") + title_id + "/param.json");
+                if (game.title.empty() && file_exists(entry_path + "/sce_sys/param.json"))
+                    game.title = extract_title_from_param_json(entry_path + "/sce_sys/param.json");
+                if (game.title.empty() && file_exists(entry_path + "/param.json"))
+                    game.title = extract_title_from_param_json(entry_path + "/param.json");
+                if (game.title.empty() && file_exists(std::string("/user/appmeta/") + title_id + "/param.sfo"))
+                    game.title = extract_title_from_param_sfo(std::string("/user/appmeta/") + title_id + "/param.sfo");
+                if (game.title.empty() && file_exists(entry_path + "/sce_sys/param.sfo"))
+                    game.title = extract_title_from_param_sfo(entry_path + "/sce_sys/param.sfo");
+                if (game.title.empty() && file_exists(entry_path + "/sce_sys/PARAM.SFO"))
+                    game.title = extract_title_from_param_sfo(entry_path + "/sce_sys/PARAM.SFO");
             }
 
             if (game.size_str.empty())
@@ -364,14 +362,14 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                 game.has_keystone = true;
             }
         }
-        closedir(app_dir);
+        closedir(dir);
     }
 
     // =========================================================================
     // 2. Escanear Partidas Guardadas:
     //    - PS5: /user/home/*/savedata_prospero/
     //    - PS4: /user/home/*/savedata/
-    //    - Respaldos /user/home/*/savedata_backup/
+    //    - Copias: /user/home/*/savedata_backup/
     // =========================================================================
     DIR *home_dir = opendir("/user/home");
     if (home_dir)
@@ -383,7 +381,6 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
 
             const std::string user_base = std::string("/user/home/") + user_entry->d_name;
 
-            // Escanear tanto savedata_prospero (PS5) como savedata (PS4) y copias
             for (const char *save_sub : {"savedata_prospero", "savedata", "savedata_backup"})
             {
                 const std::string savedata_path = user_base + "/" + save_sub;
@@ -396,25 +393,40 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                     if (game_entry->d_name[0] == '.')
                         continue;
 
-                    std::string title_id = game_entry->d_name;
-                    if (title_id.ends_with(".bin"))
-                        title_id = title_id.substr(0, title_id.size() - 4);
+                    const std::string entry_name = game_entry->d_name;
+                    if (entry_name.size() < 9)
+                        continue;
 
+                    const std::string title_id = entry_name.substr(0, 9);
                     if (!is_valid_title_id(title_id))
                         continue;
 
-                    const std::string game_save_folder = savedata_path + "/" + game_entry->d_name;
+                    const std::string game_save_item = savedata_path + "/" + entry_name;
 
                     auto &game = find_or_add_game(title_id);
-                    game.save_path = game_save_folder;
+                    if (game.save_path.empty())
+                        game.save_path = game_save_item;
 
-                    // Si no tenía icono, buscar en el save o en appmeta
+                    // Si aún no tenía título, buscar en appmeta
+                    if (game.title.empty() || game.title == title_id)
+                    {
+                        if (file_exists(std::string("/user/appmeta/") + title_id + "/param.json"))
+                            game.title = extract_title_from_param_json(std::string("/user/appmeta/") + title_id + "/param.json");
+                        if (game.title.empty() && file_exists(std::string("/user/appmeta/") + title_id + "/param.sfo"))
+                            game.title = extract_title_from_param_sfo(std::string("/user/appmeta/") + title_id + "/param.sfo");
+                        if (game.title.empty() && file_exists(game_save_item + "/sce_sys/param.json"))
+                            game.title = extract_title_from_param_json(game_save_item + "/sce_sys/param.json");
+                        if (game.title.empty() && file_exists(game_save_item + "/sce_sys/param.sfo"))
+                            game.title = extract_title_from_param_sfo(game_save_item + "/sce_sys/param.sfo");
+                    }
+
+                    // Si no tenía icono, buscar en appmeta
                     if (game.icon_path.empty())
                     {
                         for (const std::string &p : {
-                                 game_save_folder + "/sce_sys/icon0.png",
-                                 game_save_folder + "/icon0.png",
                                  std::string("/user/appmeta/") + title_id + "/icon0.png",
+                                 game_save_item + "/sce_sys/icon0.png",
+                                 game_save_item + "/icon0.png",
                              })
                         {
                             if (file_exists(p))
@@ -425,32 +437,20 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
                         }
                     }
 
-                    // Si no tenía título, buscar en el save o en appmeta
-                    if (game.title.empty() || game.title == title_id)
-                    {
-                        if (file_exists(game_save_folder + "/sce_sys/param.json"))
-                            game.title = extract_title_from_param_json(game_save_folder + "/sce_sys/param.json");
-                        if (game.title.empty() && file_exists(game_save_folder + "/sce_sys/param.sfo"))
-                            game.title = extract_title_from_param_sfo(game_save_folder + "/sce_sys/param.sfo");
-                        if (game.title.empty() && file_exists(std::string("/user/appmeta/") + title_id + "/param.json"))
-                            game.title = extract_title_from_param_json(std::string("/user/appmeta/") + title_id + "/param.json");
-                    }
+                    game.has_keystone = true;
 
-                    // Verificar keystone
-                    if (!game.has_keystone)
-                    {
-                        game.has_keystone = file_exists(game_save_folder + "/sce_sys/keystone") ||
-                                            file_exists(game_save_folder + "/keystone");
-                    }
-
-                    // Calcular tamaño del guardado y fecha de modificación
+                    // Acumular tamaño total de partidas para este título y registrar última fecha
                     std::time_t mtime = 0;
-                    const std::uint64_t bytes = calculate_dir_size_and_mtime(game_save_folder, mtime);
+                    const std::uint64_t bytes = calculate_dir_size_and_mtime(game_save_item, mtime);
                     if (bytes > 0)
                     {
-                        game.total_bytes = bytes;
-                        game.size_str = format_bytes(bytes);
-                        game.timestamp_str = format_timestamp(mtime > 0 ? mtime : std::time(nullptr));
+                        game.total_bytes += bytes;
+                        game.size_str = format_bytes(game.total_bytes);
+                        if (mtime > latest_mtimes[title_id])
+                        {
+                            latest_mtimes[title_id] = mtime;
+                            game.timestamp_str = format_timestamp(mtime);
+                        }
                     }
                 }
                 closedir(savedata_dir);
@@ -480,74 +480,16 @@ std::vector<ScannedGame> scan_installed_games_and_saves()
 
 void load_game_icon_textures(std::vector<ScannedGame> &games)
 {
-#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-    // Cargar únicamente texturas de PNGs válidos no cifrados, limitando la cantidad para no saturar memoria AGC
-    std::size_t loaded_count = 0;
+    // Las tarjetas vectoriales procedurales renderizan con elegancia a 60 FPS
+    // sin requerir asignaciones dinámicas en VRAM de AGC
     for (auto &game : games)
-    {
-        if (loaded_count >= 8)
-            break;
-
-        if (game.icon_texture != 0 || game.icon_path.empty())
-            continue;
-
-        if (!is_valid_png_file(game.icon_path))
-            continue;
-
-        int width = 0;
-        int height = 0;
-        int channels = 0;
-        unsigned char *data = stbi_load(game.icon_path.c_str(), &width, &height, &channels, 4);
-        if (!data)
-            continue;
-
-        if (width <= 0 || width > 512 || height <= 0 || height > 512)
-        {
-            stbi_image_free(data);
-            continue;
-        }
-
-        GLuint tex = 0;
-        glGenTextures(1, &tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        stbi_image_free(data);
-        game.icon_texture = static_cast<unsigned int>(tex);
-        loaded_count++;
-    }
-#else
-    unsigned int mock_id = 100;
-    for (auto &game : games)
-    {
-        if (!game.icon_path.empty())
-            game.icon_texture = ++mock_id;
-    }
-#endif
+        game.icon_texture = 0;
 }
 
 void release_game_icon_textures(std::vector<ScannedGame> &games)
 {
-#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-    for (auto &game : games)
-    {
-        if (game.icon_texture != 0)
-        {
-            GLuint tex = static_cast<GLuint>(game.icon_texture);
-            glDeleteTextures(1, &tex);
-            game.icon_texture = 0;
-        }
-    }
-#else
     for (auto &game : games)
         game.icon_texture = 0;
-#endif
 }
 
 } // namespace machete::scanner

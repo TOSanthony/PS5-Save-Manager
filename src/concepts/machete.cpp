@@ -133,6 +133,7 @@ class Machete final : public app::Concept
             }
             if (result.root_access)
             {
+                root_active_.store(true);
                 jb_needs_refresh_.store(true);
             }
             jb_thread_running_.store(false);
@@ -150,6 +151,7 @@ class Machete final : public app::Concept
 
         // 1. Verificación instantánea sin bloqueo (< 1ms)
         jb_info_ = machete::jailbreak::check_status();
+        root_active_.store(jb_info_.root_access);
 
         // 2. Escaneo de dispositivos de almacenamiento
         active_devices_ = machete::storage::scan_storage_devices();
@@ -158,7 +160,7 @@ class Machete final : public app::Concept
         refresh_games();
 
         // 4. Si aún no tenemos privilegios root, lanzar elevación en segundo plano
-        if (!jb_info_.root_access)
+        if (!root_active_.load())
         {
             start_async_jailbreak();
         }
@@ -221,12 +223,16 @@ class Machete final : public app::Concept
         if (jb_poll_timer_ >= 3.0f)
         {
             jb_poll_timer_ = 0.0f;
-            if (!jb_info_.root_access && !jb_thread_running_.load())
+            if (!root_active_.load() && !jb_thread_running_.load())
             {
                 const auto current = machete::jailbreak::check_status();
                 if (current.root_access)
                 {
-                    jb_info_ = current;
+                    {
+                        std::lock_guard<std::mutex> lock(jb_mutex_);
+                        jb_info_ = current;
+                    }
+                    root_active_.store(true);
                     refresh_games();
                     notification_timer_ = 4.0f;
                     std::snprintf(notification_text_, sizeof(notification_text_), "%s",
@@ -263,7 +269,7 @@ class Machete final : public app::Concept
         // Atajo Square: Recargar lista de juegos y reintentar elevación si es necesario
         else if (input.is_pressed(Action::west))
         {
-            if (!jb_info_.root_access)
+            if (!root_active_.load())
                 start_async_jailbreak();
             refresh_games();
             std::snprintf(notification_text_, sizeof(notification_text_),
@@ -734,7 +740,7 @@ class Machete final : public app::Concept
 
         // Badge de Estado del Jailbreak / Daemon
         const Rect jb_chip{1190, 108, 330, 44};
-        const bool is_root = jb_info_.root_access;
+        const bool is_root = root_active_.load();
         list.rounded_rect(jb_chip, 22.0f, Color::rgb(0x132242).with_alpha(0.8f));
         paint.stroke(jb_chip, 22.0f, 1.5f,
                      is_root ? Color::rgb(0x38ef7d).with_alpha(0.4f)
@@ -1232,6 +1238,7 @@ class Machete final : public app::Concept
     std::thread jb_thread_;
     std::atomic<bool> jb_thread_running_{false};
     std::atomic<bool> jb_needs_refresh_{false};
+    std::atomic<bool> root_active_{false};
     std::mutex jb_mutex_;
 
     // Notificaciones

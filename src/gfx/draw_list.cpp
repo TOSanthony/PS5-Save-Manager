@@ -59,7 +59,7 @@ Instance &DrawList::append(std::uint32_t texture)
     const bool clipped = !clips_.empty();
     const Rect clip = clipped ? clips_.back() : Rect{};
     if (runs_.empty() || runs_.back().mesh ||
-        (runs_.back().texture != texture && texture != 0 && runs_.back().texture != 0) ||
+        runs_.back().texture != texture ||
         !same_clip(runs_.back(), clipped, clip))
     {
         Run run;
@@ -70,8 +70,7 @@ Instance &DrawList::append(std::uint32_t texture)
         runs_.push_back(run);
     }
     Run &run = runs_.back();
-    if (texture != 0)
-        run.texture = texture; // untextured instances can share a textured run
+    run.texture = texture;
     ++run.count;
     instances_.push_back(Instance{});
     return instances_.back();

@@ -162,44 +162,6 @@ void ensure_etahen_whitelist() noexcept
             }
         }
     }
-
-    // Asegurar registro en /data/etaHEN/config.ini bajo [app_jailbreak]
-    const char *cfg_path = "/data/etaHEN/config.ini";
-    std::FILE *cfg = std::fopen(cfg_path, "r");
-    if (cfg)
-    {
-        std::fseek(cfg, 0, SEEK_END);
-        const long len = std::ftell(cfg);
-        std::fseek(cfg, 0, SEEK_SET);
-        if (len > 0 && len < 65536)
-        {
-            std::string content(static_cast<std::size_t>(len), '\0');
-            const std::size_t r = std::fread(content.data(), 1, static_cast<std::size_t>(len), cfg);
-            std::fclose(cfg);
-            content.resize(r);
-
-            if (content.find("PPSA99001") == std::string::npos)
-            {
-                const std::size_t sec = content.find("[app_jailbreak]");
-                if (sec != std::string::npos)
-                    content.insert(sec + 15, "\nPPSA99001=1");
-                else
-                    content += "\n[app_jailbreak]\nPPSA99001=1\n";
-
-                std::FILE *out = std::fopen(cfg_path, "w");
-                if (out)
-                {
-                    std::fwrite(content.data(), 1, content.size(), out);
-                    std::fclose(out);
-                    (void)chmod(cfg_path, 0666);
-                }
-            }
-        }
-        else
-        {
-            std::fclose(cfg);
-        }
-    }
 }
 
 } // namespace
