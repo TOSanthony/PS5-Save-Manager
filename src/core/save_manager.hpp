@@ -7,7 +7,9 @@
 #include "core/game_scanner.hpp"
 #include "core/storage.hpp"
 
+#include <functional>
 #include <string>
+#include <vector>
 
 namespace machete::save
 {
@@ -19,6 +21,17 @@ struct OperationResult
     std::uint64_t bytes_transferred = 0;
     int files_transferred = 0;
 };
+
+struct OperationProgress
+{
+    float progress = 0.0f; // 0.0f a 1.0f
+    std::string current_file;
+    std::uint64_t bytes_transferred = 0;
+    std::uint64_t total_bytes = 0;
+    int files_transferred = 0;
+};
+
+using ProgressCallback = std::function<void(const OperationProgress &progress)>;
 
 struct BackupItem
 {
@@ -39,11 +52,13 @@ struct BackupItem
 // Respalda la partida de un juego hacia el dispositivo de almacenamiento seleccionado
 // Preserva intacto el archivo keystone y sincroniza las caches vnode (fsync/sync) para evitar CE-108255-1
 OperationResult backup_game_save(const scanner::ScannedGame &game,
-                                 const storage::StorageDevice &dest_device);
+                                 const storage::StorageDevice &dest_device,
+                                 ProgressCallback progress_cb = nullptr);
 
 // Restaura una copia de seguridad hacia la ubicacion activa del juego en /user/home/.../savedata/
 OperationResult restore_game_save(const scanner::ScannedGame &game,
-                                  const storage::StorageDevice &source_device);
+                                  const storage::StorageDevice &source_device,
+                                  ProgressCallback progress_cb = nullptr);
 
 // Busca todas las copias de seguridad existentes de un juego en los dispositivos conectados
 std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
@@ -51,6 +66,7 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
 
 // Restaura una copia de seguridad especifica elegida por el usuario
 OperationResult restore_backup_item(const scanner::ScannedGame &game,
-                                    const BackupItem &backup);
+                                    const BackupItem &backup,
+                                    ProgressCallback progress_cb = nullptr);
 
 } // namespace machete::save

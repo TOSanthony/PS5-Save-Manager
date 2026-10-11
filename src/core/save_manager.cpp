@@ -30,8 +30,42 @@ std::string sanitize_name(std::string name)
     return name;
 }
 
+std::uint64_t calculate_directory_size(const std::string &path)
+{
+    struct stat st{};
+    if (stat(path.c_str(), &st) != 0)
+        return 0;
+    if (S_ISREG(st.st_mode))
+        return static_cast<std::uint64_t>(st.st_size);
+
+    DIR *dir = opendir(path.c_str());
+    if (!dir)
+        return 0;
+
+    std::uint64_t total = 0;
+    while (const dirent *entry = readdir(dir))
+    {
+        if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0)
+            continue;
+        const std::string sub_path = path + "/" + entry->d_name;
+        struct stat sub_st{};
+        if (stat(sub_path.c_str(), &sub_st) == 0)
+        {
+            if (S_ISDIR(sub_st.st_mode))
+                total += calculate_directory_size(sub_path);
+            else if (S_ISREG(sub_st.st_mode))
+                total += static_cast<std::uint64_t>(sub_st.st_size);
+        }
+    }
+    closedir(dir);
+    return total;
+}
+
 bool copy_file_with_fsync(const std::string &src, const std::string &dst,
-                          std::uint64_t &bytes_copied)
+                          std::uint64_t &bytes_copied,
+                          std::uint64_t total_bytes,
+                          int files_count,
+                          const ProgressCallback &progress_cb)
 {
     std::FILE *in = std::fopen(src.c_str(), "rb");
     if (!in)
@@ -56,6 +90,19 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
             break;
         }
         bytes_copied += n;
+        if (progress_cb)
+        {
+            OperationProgress p;
+            p.bytes_transferred = bytes_copied;
+            p.total_bytes = total_bytes;
+            p.files_transferred = files_count;
+            p.progress = (total_bytes > 0)
+                ? std::clamp(static_cast<float>(bytes_copied) / static_cast<float>(total_bytes), 0.0f, 0.98f)
+                : 0.5f;
+            const std::size_t slash = src.find_last_of('/');
+            p.current_file = (slash != std::string::npos) ? src.substr(slash + 1) : src;
+            progress_cb(p);
+        }
     }
 
     std::fflush(out);
@@ -66,16 +113,19 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
 }
 
 bool copy_directory_recursive(const std::string &src_dir, const std::string &dst_dir,
-                              int &files_count, std::uint64_t &bytes_copied)
+                              int &files_count, std::uint64_t &bytes_copied,
+                              std::uint64_t total_bytes,
+                              const ProgressCallback &progress_cb)
 {
     struct stat src_st{};
     if (stat(src_dir.c_str(), &src_st) == 0 && S_ISREG(src_st.st_mode))
     {
         mkdir(dst_dir.c_str(), 0777);
+        chmod(dst_dir.c_str(), 0777);
         std::size_t slash = src_dir.find_last_of('/');
         std::string filename = (slash != std::string::npos) ? src_dir.substr(slash + 1) : src_dir;
         std::string dst_file = dst_dir + "/" + filename;
-        if (copy_file_with_fsync(src_dir, dst_file, bytes_copied))
+        if (copy_file_with_fsync(src_dir, dst_file, bytes_copied, total_bytes, files_count, progress_cb))
         {
             files_count++;
             return true;
@@ -84,6 +134,7 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
     }
 
     mkdir(dst_dir.c_str(), 0777);
+    chmod(dst_dir.c_str(), 0777);
 
     DIR *dir = opendir(src_dir.c_str());
     if (!dir)
@@ -103,12 +154,12 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
         {
             if (S_ISDIR(st.st_mode))
             {
-                if (!copy_directory_recursive(src_path, dst_path, files_count, bytes_copied))
+                if (!copy_directory_recursive(src_path, dst_path, files_count, bytes_copied, total_bytes, progress_cb))
                     all_ok = false;
             }
             else
             {
-                if (copy_file_with_fsync(src_path, dst_path, bytes_copied))
+                if (copy_file_with_fsync(src_path, dst_path, bytes_copied, total_bytes, files_count, progress_cb))
                 {
                     files_count++;
                 }
@@ -127,7 +178,8 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
 } // namespace
 
 OperationResult backup_game_save(const scanner::ScannedGame &game,
-                                 const storage::StorageDevice &dest_device)
+                                 const storage::StorageDevice &dest_device,
+                                 ProgressCallback progress_cb)
 {
     OperationResult res;
     const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
@@ -142,14 +194,37 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
         return res;
     }
 
+    std::string root_dir = dest_device.root_dir;
+    if (root_dir.empty())
+    {
+        if (dest_device.type == storage::StorageType::Internal)
+            root_dir = "/data/" + std::string(storage::ROOT_DIR_NAME);
+        else if (dest_device.type == storage::StorageType::SSD)
+            root_dir = "/mnt/ext1/" + std::string(storage::ROOT_DIR_NAME);
+        else if (dest_device.type == storage::StorageType::USB)
+            root_dir = "/mnt/usb0/" + std::string(storage::ROOT_DIR_NAME);
+    }
+
     if (game.save_path.empty() || access(game.save_path.c_str(), F_OK) != 0)
     {
         // Si no hay carpeta en /user/home/.../savedata, usar carpeta de demo o respaldo
+        if (progress_cb)
+        {
+            OperationProgress p;
+            p.files_transferred = 1;
+            p.bytes_transferred = 0;
+            p.total_bytes = 0;
+            p.progress = 1.0f;
+            p.current_file = sanitize_name(game.title);
+            progress_cb(p);
+        }
         res.success = true;
-        const std::string target = dest_device.root_dir + "/" + game.title_id + " - " +
+        const std::string target = root_dir + "/" + game.title_id + " - " +
                                   sanitize_name(game.title);
-        mkdir(dest_device.root_dir.c_str(), 0777);
+        mkdir(root_dir.c_str(), 0777);
+        chmod(root_dir.c_str(), 0777);
         mkdir(target.c_str(), 0777);
+        chmod(target.c_str(), 0777);
         res.message = is_es ? ("Estructura creada: " + target)
                             : ("Directory structure created: " + target);
         return res;
@@ -157,18 +232,46 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
 
     // Ruta destino: <root_dir>/<title_id> - <title>/
     const std::string dest_game_folder =
-        dest_device.root_dir + "/" + game.title_id + " - " + sanitize_name(game.title);
+        root_dir + "/" + game.title_id + " - " + sanitize_name(game.title);
 
-    mkdir(dest_device.root_dir.c_str(), 0777);
+    mkdir(root_dir.c_str(), 0777);
+    chmod(root_dir.c_str(), 0777);
     mkdir(dest_game_folder.c_str(), 0777);
+    chmod(dest_game_folder.c_str(), 0777);
+
+    std::uint64_t total_bytes = game.total_bytes;
+    if (total_bytes == 0)
+        total_bytes = calculate_directory_size(game.save_path);
 
     int files_count = 0;
     std::uint64_t bytes_copied = 0;
     const bool ok = copy_directory_recursive(game.save_path, dest_game_folder, files_count,
-                                            bytes_copied);
+                                             bytes_copied, total_bytes, progress_cb);
+
+    if (progress_cb)
+    {
+        OperationProgress p;
+        p.bytes_transferred = bytes_copied;
+        p.total_bytes = total_bytes > 0 ? total_bytes : bytes_copied;
+        p.files_transferred = files_count;
+        p.progress = 0.99f;
+        p.current_file = is_es ? "Sincronizando vnodes de disco..." : "Syncing vnode caches...";
+        progress_cb(p);
+    }
 
     // Sincronizar sistema de archivos globalmente para invalidar cachés vnode de PS4 (#198)
     sync();
+
+    if (progress_cb)
+    {
+        OperationProgress p;
+        p.bytes_transferred = bytes_copied;
+        p.total_bytes = total_bytes > 0 ? total_bytes : bytes_copied;
+        p.files_transferred = files_count;
+        p.progress = 1.0f;
+        p.current_file = is_es ? "Completado" : "Completed";
+        progress_cb(p);
+    }
 
     res.success = ok;
     res.files_transferred = files_count;
@@ -195,7 +298,8 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
 }
 
 OperationResult restore_game_save(const scanner::ScannedGame &game,
-                                  const storage::StorageDevice &source_device)
+                                  const storage::StorageDevice &source_device,
+                                  ProgressCallback progress_cb)
 {
     OperationResult res;
     const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
@@ -246,13 +350,37 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
             dst_target = game.save_path.substr(0, slash);
     }
 
+    std::uint64_t total_bytes = calculate_directory_size(backup_game_folder);
+
     int files_count = 0;
     std::uint64_t bytes_copied = 0;
     const bool ok = copy_directory_recursive(backup_game_folder, dst_target, files_count,
-                                             bytes_copied);
+                                             bytes_copied, total_bytes, progress_cb);
+
+    if (progress_cb)
+    {
+        OperationProgress p;
+        p.bytes_transferred = bytes_copied;
+        p.total_bytes = total_bytes > 0 ? total_bytes : bytes_copied;
+        p.files_transferred = files_count;
+        p.progress = 0.99f;
+        p.current_file = is_es ? "Sincronizando vnodes de disco..." : "Syncing vnode caches...";
+        progress_cb(p);
+    }
 
     // Sincronizar buffers de disco y vnodes
     sync();
+
+    if (progress_cb)
+    {
+        OperationProgress p;
+        p.bytes_transferred = bytes_copied;
+        p.total_bytes = total_bytes > 0 ? total_bytes : bytes_copied;
+        p.files_transferred = files_count;
+        p.progress = 1.0f;
+        p.current_file = is_es ? "Completado" : "Completed";
+        progress_cb(p);
+    }
 
     res.success = ok;
     res.files_transferred = files_count;
@@ -281,14 +409,64 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
     std::vector<BackupItem> backups;
     const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
 
+    struct TargetDevice
+    {
+        std::string id;
+        std::string label;
+        storage::StorageType type;
+        std::string root_dir;
+    };
+
+    std::vector<TargetDevice> targets;
+    auto add_target = [&](const std::string &id, const std::string &label,
+                          storage::StorageType type, const std::string &root_dir) {
+        if (root_dir.empty())
+            return;
+        for (const auto &t : targets)
+        {
+            if (t.root_dir == root_dir)
+                return;
+        }
+        if (access(root_dir.c_str(), F_OK) == 0)
+        {
+            targets.push_back({id, label, type, root_dir});
+        }
+    };
+
+    // 1. Agregar dispositivos provistos (verificando directamente su ruta física sin depender de flags stale)
     for (const auto &dev : devices)
     {
-        if (!dev.connected || dev.type == storage::StorageType::Cloud)
+        if (dev.type == storage::StorageType::Cloud)
             continue;
+        add_target(dev.id, dev.label, dev.type, dev.root_dir);
+    }
 
-        if (dev.root_dir.empty() || access(dev.root_dir.c_str(), F_OK) != 0)
-            continue;
+    // 2. Verificar directamente la existencia física de las rutas estándar
+    // Memoria Interna (/data/MacheteSVG)
+    add_target("internal", machete::i18n::tr(machete::i18n::StringId::StorageInternal),
+               storage::StorageType::Internal, "/data/" + std::string(storage::ROOT_DIR_NAME));
 
+    // SSD M.2 (/mnt/ext1/MacheteSVG y /mnt/ext0/MacheteSVG)
+    add_target("ssd_ext1", machete::i18n::tr(machete::i18n::StringId::StorageM2),
+               storage::StorageType::SSD, "/mnt/ext1/" + std::string(storage::ROOT_DIR_NAME));
+    add_target("ssd_ext0", machete::i18n::tr(machete::i18n::StringId::StorageM2),
+               storage::StorageType::SSD, "/mnt/ext0/" + std::string(storage::ROOT_DIR_NAME));
+
+    // Puertos USB (/mnt/usb0/MacheteSVG .. /mnt/usb7/MacheteSVG)
+    for (int i = 0; i < 8; ++i)
+    {
+        char usb_path[32];
+        std::snprintf(usb_path, sizeof(usb_path), "/mnt/usb%d", i);
+        char usb_root[64];
+        std::snprintf(usb_root, sizeof(usb_root), "%s/%s", usb_path, storage::ROOT_DIR_NAME);
+        char label_buf[64];
+        std::snprintf(label_buf, sizeof(label_buf),
+                      machete::i18n::tr(machete::i18n::StringId::StorageUsbFormat), i, usb_path);
+        add_target("usb" + std::to_string(i), label_buf, storage::StorageType::USB, usb_root);
+    }
+
+    for (const auto &dev : targets)
+    {
         DIR *dir = opendir(dev.root_dir.c_str());
         if (!dir)
             continue;
@@ -398,7 +576,8 @@ std::vector<BackupItem> find_available_backups(const scanner::ScannedGame &game,
 }
 
 OperationResult restore_backup_item(const scanner::ScannedGame &game,
-                                    const BackupItem &backup)
+                                    const BackupItem &backup,
+                                    ProgressCallback progress_cb)
 {
     OperationResult res;
     const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
@@ -428,12 +607,39 @@ OperationResult restore_backup_item(const scanner::ScannedGame &game,
             dst_target = game.save_path.substr(0, slash);
     }
 
+    std::uint64_t total_bytes = backup.total_bytes;
+    if (total_bytes == 0)
+        total_bytes = calculate_directory_size(backup.folder_path);
+
     int files_count = 0;
     std::uint64_t bytes_copied = 0;
-    const bool ok = copy_directory_recursive(backup.folder_path, dst_target, files_count, bytes_copied);
+    const bool ok = copy_directory_recursive(backup.folder_path, dst_target, files_count,
+                                             bytes_copied, total_bytes, progress_cb);
+
+    if (progress_cb)
+    {
+        OperationProgress p;
+        p.bytes_transferred = bytes_copied;
+        p.total_bytes = total_bytes > 0 ? total_bytes : bytes_copied;
+        p.files_transferred = files_count;
+        p.progress = 0.99f;
+        p.current_file = is_es ? "Sincronizando vnodes de disco..." : "Syncing vnode caches...";
+        progress_cb(p);
+    }
 
     // Sincronizar buffers de disco y vnodes
     sync();
+
+    if (progress_cb)
+    {
+        OperationProgress p;
+        p.bytes_transferred = bytes_copied;
+        p.total_bytes = total_bytes > 0 ? total_bytes : bytes_copied;
+        p.files_transferred = files_count;
+        p.progress = 1.0f;
+        p.current_file = is_es ? "Completado" : "Completed";
+        progress_cb(p);
+    }
 
     res.success = ok;
     res.files_transferred = files_count;

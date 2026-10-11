@@ -86,15 +86,29 @@ std::string get_base_path(StorageType type)
     }
 }
 
+bool ensure_internal_storage()
+{
+    const std::string root_dir = "/data/" + std::string(ROOT_DIR_NAME);
+    mkdir("/data", 0777);
+    chmod("/data", 0777);
+    int res = mkdir(root_dir.c_str(), 0777);
+    chmod(root_dir.c_str(), 0777);
+    return (res == 0 || errno == EEXIST || access(root_dir.c_str(), F_OK) == 0);
+}
+
 bool is_storage_available(StorageType type)
 {
     if (type == StorageType::Cloud)
         return true;
 
-    std::string parent_dir;
     if (type == StorageType::Internal)
-        parent_dir = "/data";
-    else if (type == StorageType::SSD)
+    {
+        const std::string root_dir = "/data/" + std::string(ROOT_DIR_NAME);
+        return (access("/data", F_OK) == 0 || access(root_dir.c_str(), F_OK) == 0);
+    }
+
+    std::string parent_dir;
+    if (type == StorageType::SSD)
         parent_dir = "/mnt/ext1";
     else if (type == StorageType::USB)
         parent_dir = "/mnt/usb0";
@@ -114,12 +128,35 @@ std::vector<StorageDevice> scan_storage_devices()
         dev.label = machete::i18n::tr(machete::i18n::StringId::StorageInternal);
         dev.mount_path = "/data";
         dev.root_dir = "/data/" + std::string(ROOT_DIR_NAME);
-        dev.connected = (access("/data", F_OK) == 0);
+
+        // Si /data o /data/MacheteSVG son accesibles, asegurar existencia y permisos 0777
+        if (access("/data", F_OK) == 0 || access(dev.root_dir.c_str(), F_OK) == 0)
+        {
+            mkdir(dev.root_dir.c_str(), 0777);
+            chmod(dev.root_dir.c_str(), 0777);
+            dev.connected = true;
+        }
+        else
+        {
+            // Intentar crear /data/MacheteSVG directamente si se han elevado privilegios root
+            if (mkdir(dev.root_dir.c_str(), 0777) == 0 || errno == EEXIST)
+            {
+                chmod(dev.root_dir.c_str(), 0777);
+                dev.connected = true;
+            }
+            else
+            {
+                dev.connected = (access("/data", F_OK) == 0);
+            }
+        }
 
         if (dev.connected)
         {
+            mkdir(dev.root_dir.c_str(), 0777);
+            chmod(dev.root_dir.c_str(), 0777);
+
             struct statfs fs{};
-            if (statfs("/data", &fs) == 0)
+            if (statfs(dev.root_dir.c_str(), &fs) == 0 || statfs("/data", &fs) == 0)
             {
                 dev.free_bytes = static_cast<std::uint64_t>(fs.f_bavail) * fs.f_bsize;
                 dev.total_bytes = static_cast<std::uint64_t>(fs.f_blocks) * fs.f_bsize;
@@ -215,13 +252,29 @@ bool poll_storage_changes(std::vector<StorageDevice> &out_devices, std::string &
             current_usb_mask |= (1ULL << i);
     }
 
+    const std::string internal_path = "/data/" + std::string(ROOT_DIR_NAME);
+    const bool current_internal_connected = (access("/data", F_OK) == 0 || access(internal_path.c_str(), F_OK) == 0);
+
     // Primera ejecución: solo registrar el estado inicial
     static bool first_run = true;
+    static bool previous_internal_connected = false;
     if (first_run)
     {
         previous_usb_mask = current_usb_mask;
+        previous_internal_connected = current_internal_connected;
         first_run = false;
         return false;
+    }
+
+    if (current_internal_connected != previous_internal_connected)
+    {
+        previous_internal_connected = current_internal_connected;
+        out_devices = scan_storage_devices();
+        if (current_internal_connected)
+        {
+            change_description = machete::i18n::tr(machete::i18n::StringId::StorageInternal);
+            return true;
+        }
     }
 
     if (current_usb_mask != previous_usb_mask)
@@ -262,6 +315,7 @@ bool ensure_directory_structure_at(const std::string &mount_path, const std::str
 {
     std::string base = mount_path + "/" + ROOT_DIR_NAME;
     mkdir(base.c_str(), 0777);
+    chmod(base.c_str(), 0777);
 
     if (title_id.empty() && game_name.empty())
         return true;
@@ -270,6 +324,7 @@ bool ensure_directory_structure_at(const std::string &mount_path, const std::str
     std::string folder_name = title_id.empty() ? safe_name : (title_id + " - " + safe_name);
     std::string game_dir = base + "/" + folder_name;
     int res = mkdir(game_dir.c_str(), 0777);
+    chmod(game_dir.c_str(), 0777);
 
     return (res == 0 || errno == EEXIST);
 }

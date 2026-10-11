@@ -16,12 +16,21 @@
 #include <sys/ucontext.h>
 #include <unistd.h>
 
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
 extern "C"
 {
     int sceKernelDebugOutText(int channel, const char *text) __attribute__((weak));
     int sceKernelUsleep(unsigned int microseconds) __attribute__((weak));
     int sceSystemServiceLoadExec(const char *path, const char **arguments) __attribute__((weak));
 }
+#else
+extern "C"
+{
+    __attribute__((weak)) int sceKernelDebugOutText(int, const char *) { return 0; }
+    __attribute__((weak)) int sceKernelUsleep(unsigned int) { return 0; }
+    __attribute__((weak)) int sceSystemServiceLoadExec(const char *, const char **) { return 0; }
+}
+#endif
 
 namespace machete::log
 {
@@ -78,6 +87,8 @@ void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
 
     std::uint64_t rip = 0, rsp = 0, rbp = 0, trapno = 0, err = 0;
     std::uint64_t rax = 0, rbx = 0, rcx = 0, rdx = 0, rsi = 0, rdi = 0;
+#if (defined(__FreeBSD__) || defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)) && (defined(__x86_64__) || defined(__amd64__))
+#if defined(__FreeBSD__) || defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
     if (ucontext)
     {
         const auto *uc = reinterpret_cast<const ucontext_t *>(ucontext);
@@ -93,6 +104,12 @@ void fatal_signal_handler(int sig, siginfo_t *info, void *ucontext)
         rsi = static_cast<std::uint64_t>(uc->uc_mcontext.mc_rsi);
         rdi = static_cast<std::uint64_t>(uc->uc_mcontext.mc_rdi);
     }
+#else
+    (void)ucontext;
+#endif
+#else
+    (void)ucontext;
+#endif
 
     char crash_msg[1024];
     std::snprintf(crash_msg, sizeof(crash_msg),

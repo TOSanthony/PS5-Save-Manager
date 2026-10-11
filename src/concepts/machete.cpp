@@ -28,6 +28,7 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 namespace hui::concepts
@@ -94,14 +95,45 @@ class Machete final : public app::Concept
         focus_ = kGame0;
         selected_game_ = 0;
         focus_amount_[kGame0].snap(1.0f);
+        op_progress_bar_.snap(0.0f);
+        op_overlay_show_.snap(0.0f);
         build_tour();
     }
 
     ~Machete() override
     {
+        if (op_thread_.joinable())
+            op_thread_.join();
         if (jb_thread_.joinable())
             jb_thread_.join();
         machete::scanner::release_game_icon_textures(games_);
+        if (app_icon_texture_ != 0)
+        {
+            machete::scanner::release_texture(app_icon_texture_);
+            app_icon_texture_ = 0;
+        }
+    }
+
+    void load_app_icon() const
+    {
+        if (app_icon_texture_ != 0)
+            return;
+
+        const char *candidates[] = {
+            "/app0/sce_sys/icon0.png",
+            "sce_sys/icon0.png",
+            "/data/homebrew/PPSA99001/sce_sys/icon0.png",
+            "/user/appmeta/PPSA99001/icon0.png",
+            "/mnt/ext0/user/appmeta/PPSA99001/icon0.png",
+            "/mnt/ext1/user/appmeta/PPSA99001/icon0.png",
+        };
+
+        for (const char *path : candidates)
+        {
+            app_icon_texture_ = machete::scanner::load_texture_from_png(path);
+            if (app_icon_texture_ != 0)
+                break;
+        }
     }
 
     const app::ConceptInfo &info() const override
@@ -116,6 +148,122 @@ class Machete final : public app::Concept
             kTechniques,
         };
         return kInfo;
+    }
+
+    void start_async_backup(const machete::scanner::ScannedGame &game,
+                            const machete::storage::StorageDevice &dev)
+    {
+        if (op_thread_.joinable())
+            op_thread_.join();
+
+        is_operating_.store(true);
+        operation_progress_.store(0.0f);
+        operation_result_ready_.store(false);
+        op_type_ = OperationType::Backup;
+
+        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+        {
+            std::lock_guard<std::mutex> lock(op_mutex_);
+            operation_title_ = is_es ? ("Respaldando " + (!game.title.empty() ? game.title : game.title_id))
+                                     : ("Backing up " + (!game.title.empty() ? game.title : game.title_id));
+            operation_detail_ = is_es ? ("Iniciando transferencia a " + dev.label + "...")
+                                      : ("Starting transfer to " + dev.label + "...");
+            operation_result_ = {};
+        }
+
+        MACHETE_LOG("[OPERATION]", "Iniciando respaldo en segundo plano: %s -> %s",
+                    game.title_id.c_str(), dev.label.c_str());
+
+        op_thread_ = std::thread([this, game, dev]() {
+            MACHETE_BREADCRUMB("op_thread: backup_game_save");
+            const auto res = machete::save::backup_game_save(
+                game, dev, [this](const machete::save::OperationProgress &p) {
+                    operation_progress_.store(p.progress);
+                    std::lock_guard<std::mutex> lock(op_mutex_);
+                    char buf[256];
+                    const double mb_done = static_cast<double>(p.bytes_transferred) / (1024.0 * 1024.0);
+                    const double mb_tot = static_cast<double>(p.total_bytes) / (1024.0 * 1024.0);
+                    if (mb_tot > 0.05)
+                    {
+                        std::snprintf(buf, sizeof(buf), "%.1f / %.1f MB  (%d%%)  -  %s",
+                                      mb_done, mb_tot, static_cast<int>(p.progress * 100.0f),
+                                      p.current_file.c_str());
+                    }
+                    else
+                    {
+                        std::snprintf(buf, sizeof(buf), "%d archivos  -  %s",
+                                      p.files_transferred, p.current_file.c_str());
+                    }
+                    operation_detail_ = buf;
+                });
+
+            {
+                std::lock_guard<std::mutex> lock(op_mutex_);
+                operation_result_ = res;
+            }
+            operation_progress_.store(1.0f);
+            operation_result_ready_.store(true);
+            is_operating_.store(false);
+            MACHETE_BREADCRUMB("op_thread: backup_game_save done");
+        });
+    }
+
+    void start_async_restore(const machete::scanner::ScannedGame &game,
+                             const machete::save::BackupItem &backup)
+    {
+        if (op_thread_.joinable())
+            op_thread_.join();
+
+        is_operating_.store(true);
+        operation_progress_.store(0.0f);
+        operation_result_ready_.store(false);
+        op_type_ = OperationType::Restore;
+
+        const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+        {
+            std::lock_guard<std::mutex> lock(op_mutex_);
+            operation_title_ = is_es ? ("Restaurando " + (!game.title.empty() ? game.title : game.title_id))
+                                     : ("Restoring " + (!game.title.empty() ? game.title : game.title_id));
+            operation_detail_ = is_es ? "Extrayendo partida preservando Keystone..."
+                                      : "Extracting save preserving Keystone...";
+            operation_result_ = {};
+        }
+
+        MACHETE_LOG("[OPERATION]", "Iniciando restauracion en segundo plano: %s <- %s",
+                    game.title_id.c_str(), backup.folder_path.c_str());
+
+        op_thread_ = std::thread([this, game, backup]() {
+            MACHETE_BREADCRUMB("op_thread: restore_backup_item");
+            const auto res = machete::save::restore_backup_item(
+                game, backup, [this](const machete::save::OperationProgress &p) {
+                    operation_progress_.store(p.progress);
+                    std::lock_guard<std::mutex> lock(op_mutex_);
+                    char buf[256];
+                    const double mb_done = static_cast<double>(p.bytes_transferred) / (1024.0 * 1024.0);
+                    const double mb_tot = static_cast<double>(p.total_bytes) / (1024.0 * 1024.0);
+                    if (mb_tot > 0.05)
+                    {
+                        std::snprintf(buf, sizeof(buf), "%.1f / %.1f MB  (%d%%)  -  %s",
+                                      mb_done, mb_tot, static_cast<int>(p.progress * 100.0f),
+                                      p.current_file.c_str());
+                    }
+                    else
+                    {
+                        std::snprintf(buf, sizeof(buf), "%d archivos  -  %s",
+                                      p.files_transferred, p.current_file.c_str());
+                    }
+                    operation_detail_ = buf;
+                });
+
+            {
+                std::lock_guard<std::mutex> lock(op_mutex_);
+                operation_result_ = res;
+            }
+            operation_progress_.store(1.0f);
+            operation_result_ready_.store(true);
+            is_operating_.store(false);
+            MACHETE_BREADCRUMB("op_thread: restore_backup_item done");
+        });
     }
 
     void start_async_jailbreak()
@@ -182,6 +330,10 @@ class Machete final : public app::Concept
             MACHETE_BREADCRUMB("MacheteConcept::enter: launching async jailbreak");
             start_async_jailbreak();
         }
+
+        // 5. Cargar emblema oficial de la aplicacion
+        load_app_icon();
+
         MACHETE_BREADCRUMB("MacheteConcept::enter finished");
     }
 
@@ -236,6 +388,8 @@ class Machete final : public app::Concept
         {
             MACHETE_BREADCRUMB("machete: jb_needs_refresh");
             machete::jailbreak::clean_shadowmount_interference();
+            machete::storage::ensure_internal_storage();
+            active_devices_ = machete::storage::scan_storage_devices();
             refresh_games();
             const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
             std::snprintf(notification_text_, sizeof(notification_text_), "%s",
@@ -263,6 +417,8 @@ class Machete final : public app::Concept
                             jb_info_ = current;
                         }
                         root_active_.store(true);
+                        machete::storage::ensure_internal_storage();
+                        active_devices_ = machete::storage::scan_storage_devices();
                         refresh_games();
                         notification_timer_ = 4.0f;
                         std::snprintf(notification_text_, sizeof(notification_text_), "%s",
@@ -271,6 +427,36 @@ class Machete final : public app::Concept
                     }
                 }
             }
+        }
+
+        // Verificación de finalización de operación asíncrona en segundo plano
+        if (operation_result_ready_.exchange(false))
+        {
+            machete::save::OperationResult res;
+            {
+                std::lock_guard<std::mutex> lock(op_mutex_);
+                res = operation_result_;
+            }
+            notification_timer_ = 4.5f;
+            std::snprintf(notification_text_, sizeof(notification_text_), "%s", res.message.c_str());
+            feedback.play(res.success ? audio::Cue::saved : audio::Cue::error, 1.0f, 0.0f);
+            if (op_type_ == OperationType::Restore && res.success)
+            {
+                refresh_games();
+            }
+            op_type_ = OperationType::None;
+        }
+
+        const bool operating = is_operating_.load();
+        op_overlay_show_.target = operating ? 1.0f : 0.0f;
+        op_overlay_show_.update(dt, 22.0f);
+        op_progress_bar_.target = operation_progress_.load();
+        op_progress_bar_.update(dt, 16.0f);
+        if (operating || op_overlay_show_.value > 0.01f)
+        {
+            op_spinner_angle_ += dt * 360.0f * 1.5f;
+            if (op_spinner_angle_ >= 360.0f)
+                op_spinner_angle_ -= 360.0f;
         }
 
         const ui::Theme &theme = ui::themes()[static_cast<std::size_t>(theme_)];
@@ -283,6 +469,17 @@ class Machete final : public app::Concept
             theme_ = (theme_ + (input.is_pressed(Action::jump_next) ? 1 : count - 1)) % count;
             switch_.start(context_.settings.reduced_motion ? 0.16f : 0.42f);
             feedback.play(audio::Cue::tab, 1.0f, 0.0f);
+        }
+        // Protección contra spam de botones mientras se realiza una operación en segundo plano
+        else if (operating || op_overlay_show_.value > 0.05f)
+        {
+            if (input.is_pressed(Action::confirm) || input.is_pressed(Action::west) ||
+                input.is_pressed(Action::north) || input.is_pressed(Action::back) ||
+                input.nav != Direction::none)
+            {
+                refuse_.trigger();
+                feedback.play(audio::Cue::error, 1.0f, 0.0f);
+            }
         }
         // Atajo Triangle: Abrir / alternar sincronización con Google Drive directamente
         else if (input.is_pressed(Action::north))
@@ -302,6 +499,8 @@ class Machete final : public app::Concept
         {
             if (!root_active_.load())
                 start_async_jailbreak();
+            machete::storage::ensure_internal_storage();
+            active_devices_ = machete::storage::scan_storage_devices();
             refresh_games();
             std::snprintf(notification_text_, sizeof(notification_text_),
                           machete::i18n::tr(machete::i18n::StringId::ToastScanUpdated), games_.size());
@@ -338,7 +537,8 @@ class Machete final : public app::Concept
 
         for (int i = 0; i < kItemCount; ++i)
         {
-            const bool focused = (!dialog_ && !drive_dialog_ && i == focus_);
+            const bool focused = (!dialog_ && !drive_dialog_ && i == focus_ && !operating &&
+                                  op_overlay_show_.value <= 0.05f);
             focus_amount_[i].target = focused ? 1.0f : 0.0f;
             focus_amount_[i].update(dt, std::max(omega, 22.0f));
             press_[i].update(dt, 9.0f);
@@ -519,6 +719,12 @@ class Machete final : public app::Concept
 
     void activate(app::Feedback &feedback)
     {
+        if (is_operating_.load() || op_overlay_show_.value > 0.05f)
+        {
+            feedback.play(audio::Cue::error, 1.0f, 0.0f);
+            return;
+        }
+
         press_[focus_].trigger();
 
         if (focus_ >= kGame0 && focus_ <= kGame4)
@@ -529,6 +735,8 @@ class Machete final : public app::Concept
         {
             if (games_.empty())
                 return;
+            machete::storage::ensure_internal_storage();
+            active_devices_ = machete::storage::scan_storage_devices();
             dialog_is_backup_ = true;
             dialog_ = true;
             dialog_focus_ = 0;
@@ -538,6 +746,8 @@ class Machete final : public app::Concept
         {
             if (games_.empty())
                 return;
+            machete::storage::ensure_internal_storage();
+            active_devices_ = machete::storage::scan_storage_devices();
             const auto &game = games_[static_cast<std::size_t>(selected_game_)];
             MACHETE_BREADCRUMB("machete: find_available_backups");
             available_backups_ = machete::save::find_available_backups(game, active_devices_);
@@ -691,7 +901,7 @@ class Machete final : public app::Concept
             else if (dialog_focus_ >= 0 && dialog_focus_ < opt_count && !games_.empty())
             {
                 const auto &game = games_[static_cast<std::size_t>(selected_game_)];
-                const auto &dev = active_devices_[static_cast<std::size_t>(dialog_focus_)];
+                auto &dev = active_devices_[static_cast<std::size_t>(dialog_focus_)];
 
                 if (dev.type == machete::storage::StorageType::Cloud)
                 {
@@ -717,13 +927,24 @@ class Machete final : public app::Concept
                 }
                 else
                 {
-                    MACHETE_BREADCRUMB("machete: backup_game_save");
-                    const auto res = machete::save::backup_game_save(game, dev);
-                    std::snprintf(notification_text_, sizeof(notification_text_), "%s",
-                                  res.message.c_str());
-                    notification_timer_ = 4.0f;
+                    if (is_operating_.load())
+                    {
+                        feedback.play(audio::Cue::error, 1.0f, 0.0f);
+                        return;
+                    }
+
+                    if (dev.type == machete::storage::StorageType::Internal)
+                    {
+                        machete::storage::ensure_internal_storage();
+                        if (!dev.connected && (access("/data", F_OK) == 0 || access(dev.root_dir.c_str(), F_OK) == 0))
+                        {
+                            dev.connected = true;
+                        }
+                    }
+
                     dialog_ = false;
-                    feedback.play(res.success ? audio::Cue::saved : audio::Cue::error, 1.0f, 0.0f);
+                    feedback.play(audio::Cue::select, 1.0f, 0.0f);
+                    start_async_backup(game, dev);
                 }
             }
         }
@@ -773,15 +994,18 @@ class Machete final : public app::Concept
                 }
                 else if (dialog_focus_ >= 0 && dialog_focus_ < opt_count && !games_.empty())
                 {
+                    if (is_operating_.load())
+                    {
+                        feedback.play(audio::Cue::error, 1.0f, 0.0f);
+                        return;
+                    }
+
                     const auto &game = games_[static_cast<std::size_t>(selected_game_)];
                     const auto &backup = available_backups_[static_cast<std::size_t>(dialog_focus_)];
-                    MACHETE_BREADCRUMB("machete: restore_backup_item");
-                    const auto res = machete::save::restore_backup_item(game, backup);
-                    std::snprintf(notification_text_, sizeof(notification_text_), "%s",
-                                  res.message.c_str());
-                    notification_timer_ = 4.5f;
+
                     dialog_ = false;
-                    feedback.play(res.success ? audio::Cue::saved : audio::Cue::error, 1.0f, 0.0f);
+                    feedback.play(audio::Cue::select, 1.0f, 0.0f);
+                    start_async_restore(game, backup);
                 }
             }
         }
@@ -809,14 +1033,27 @@ class Machete final : public app::Concept
         // 1. CABECERA Y LOGO EMBLEMA (Apple Liquid Glass)
         // ==========================================
         const Rect logo_rect{96, 92, 60, 60};
-        list.rounded_rect(logo_rect, 14.0f, Color::rgb(0x101b3d).with_alpha(0.85f));
-        paint.stroke(logo_rect, 14.0f, 1.5f, Color::rgb(0x76d6ff).with_alpha(0.35f));
+        if (app_icon_texture_ == 0)
+        {
+            load_app_icon();
+        }
 
-        // Silueta Memory Card y filo de machete
-        list.rounded_rect({logo_rect.x + 16, logo_rect.y + 14, 28, 34}, 4.0f,
-                          Color::rgb(0x76d6ff).with_alpha(0.25f));
-        list.line(logo_rect.x + 12, logo_rect.y + 46, logo_rect.x + 48, logo_rect.y + 14, 3.0f,
-                  Color::rgb(0x76d6ff));
+        if (app_icon_texture_ != 0)
+        {
+            // Logotipo oficial de MacheteSVG (icon0.png) con esquinas redondeadas
+            list.image(app_icon_texture_, logo_rect, gfx::kFullUv, Color::rgb(0xffffff), 14.0f);
+            paint.stroke(logo_rect, 14.0f, 1.5f, Color::rgb(0x76d6ff).with_alpha(0.35f));
+        }
+        else
+        {
+            // Fallback en caso de que icon0.png no este disponible
+            list.rounded_rect(logo_rect, 14.0f, Color::rgb(0x101b3d).with_alpha(0.85f));
+            paint.stroke(logo_rect, 14.0f, 1.5f, Color::rgb(0x76d6ff).with_alpha(0.35f));
+            list.rounded_rect({logo_rect.x + 16, logo_rect.y + 14, 28, 34}, 4.0f,
+                              Color::rgb(0x76d6ff).with_alpha(0.25f));
+            list.line(logo_rect.x + 12, logo_rect.y + 46, logo_rect.x + 48, logo_rect.y + 14, 3.0f,
+                      Color::rgb(0x76d6ff));
+        }
 
         paint.heading(machete::i18n::tr(machete::i18n::StringId::AppTitle), 172, 138, 44, paint.page_text());
         paint.label(machete::i18n::tr(machete::i18n::StringId::AppSubtitle), 174, 166, 17, paint.page_text_muted());
@@ -1382,6 +1619,77 @@ class Machete final : public app::Concept
         }
 
         // ==========================================
+        // 5.5. MODAL DE PROGRESO DE OPERACIÓN ASÍNCRONA (Apple Liquid Glass)
+        // ==========================================
+        const float op_show = op_overlay_show_.value;
+        if (op_show > 0.005f)
+        {
+            list.rounded_rect({0, 0, gfx::kVirtualWidth, gfx::kVirtualHeight}, 0,
+                              Color::rgb(0x000000).with_alpha(0.72f * op_show));
+            list.push_opacity(tween::clamp01(op_show));
+            list.push_transform(0.92f + 0.08f * tween::clamp01(op_show), 960, 540, 0, 0);
+
+            const Rect card{520, 310, 880, 460};
+            paint.panel(card);
+
+            std::string title_str;
+            std::string detail_str;
+            {
+                std::lock_guard<std::mutex> lock(op_mutex_);
+                title_str = operation_title_;
+                detail_str = operation_detail_;
+            }
+
+            const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+            const float progress = tween::clamp01(op_progress_bar_.value);
+            const int pct = static_cast<int>(std::round(progress * 100.0f));
+
+            // Spinner animado (anillo con satélite orbital)
+            const float spin_cx = 960.0f;
+            const float spin_cy = 390.0f;
+            const float spin_r = 30.0f;
+            list.circle(spin_cx, spin_cy, spin_r, theme.primary.with_alpha(0.18f));
+            const float rad = op_spinner_angle_ * (3.14159265f / 180.0f);
+            const float sat_x = spin_cx + std::cos(rad) * spin_r;
+            const float sat_y = spin_cy + std::sin(rad) * spin_r;
+            list.circle(sat_x, sat_y, 6.0f, theme.primary);
+
+            // Título de la operación
+            paint.heading(title_str.c_str(), 960, 465, 30, theme.text, gfx::Align::center);
+
+            // Barra de progreso (Track & Fill)
+            const Rect track_rect{580, 505, 760, 16};
+            list.rounded_rect(track_rect, 8.0f, Color::rgb(0xffffff).with_alpha(0.08f));
+            paint.stroke(track_rect, 8.0f, 1.0f, Color::rgb(0xffffff).with_alpha(0.12f));
+
+            if (progress > 0.005f)
+            {
+                const Rect fill_rect{track_rect.x, track_rect.y, std::max(16.0f, track_rect.w * progress), track_rect.h};
+                list.rounded_rect(fill_rect, 8.0f, theme.primary);
+            }
+
+            // Porcentaje centrado
+            char pct_str[32];
+            std::snprintf(pct_str, sizeof(pct_str), "%d%%", pct);
+            paint.heading(pct_str, 960, 565, 32, theme.primary, gfx::Align::center);
+
+            // Detalle de transferencia (MB transferidos, archivo actual)
+            if (!detail_str.empty())
+            {
+                paint.body(detail_str.c_str(), 960, 610, 19, theme.text.with_alpha(0.9f), gfx::Align::center);
+            }
+
+            // Advertencia de integridad y seguridad
+            const char *warning_msg = is_es
+                ? "Preservando Keystone & sincronizando almacenamiento. No apagues la consola."
+                : "Preserving Keystone & syncing storage. Do not turn off console.";
+            paint.label(warning_msg, 960, 695, 16, theme.text_muted, gfx::Align::center);
+
+            list.pop_transform();
+            list.pop_opacity();
+        }
+
+        // ==========================================
         // 6. TECLAS Y CONTROLES DUALSENSE
         // ==========================================
         const ui::GlyphStyle glyphs = theme.dark ? ui::GlyphStyle::dark() : ui::GlyphStyle::light();
@@ -1454,6 +1762,24 @@ class Machete final : public app::Concept
     // Notificaciones
     float notification_timer_ = 0.0f;
     char notification_text_[256] = "";
+
+    // Textura del icono oficial de MacheteSVG (/app0/sce_sys/icon0.png)
+    mutable unsigned int app_icon_texture_{0};
+
+    // Operaciones Asíncronas en Segundo Plano (Worker Thread)
+    enum class OperationType { None, Backup, Restore } op_type_ = OperationType::None;
+    std::thread op_thread_;
+    std::atomic<bool> is_operating_{false};
+    std::atomic<float> operation_progress_{0.0f};
+    std::atomic<bool> operation_result_ready_{false};
+    mutable std::mutex op_mutex_;
+    std::string operation_title_;
+    std::string operation_detail_;
+    machete::save::OperationResult operation_result_;
+
+    tween::Spring op_progress_bar_;
+    tween::Spring op_overlay_show_;
+    float op_spinner_angle_{0.0f};
 };
 
 } // namespace

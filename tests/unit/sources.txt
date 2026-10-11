@@ -15,6 +15,7 @@ src/core/i18n.cpp
 src/core/game_scanner.cpp
 src/core/jailbreak.cpp
 src/core/save_manager.cpp
+src/core/logger.cpp
 src/cloud/google_drive.cpp
 src/core/frame_stats.cpp
 src/core/input.cpp

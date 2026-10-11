@@ -42,4 +42,13 @@ std::string extract_title_from_param_json(const std::string &param_path);
 // Extrae el título oficial localizado de un archivo param.sfo (PS4)
 std::string extract_title_from_param_sfo(const std::string &sfo_path);
 
+// Carga una textura OpenGL desde un archivo de imagen PNG
+unsigned int load_texture_from_png(const std::string &path);
+
+// Libera una textura OpenGL en la GPU
+void release_texture(unsigned int &texture_id);
+
+// Verifica si un texto contiene caracteres legibles en la fuente SDF latina/occidental
+bool is_renderable_latin(const std::string &str);
+
 } // namespace machete::scanner

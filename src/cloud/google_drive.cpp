@@ -22,23 +22,16 @@ extern "C"
     int sceNetPoolDestroy(int pool);
     int sceSslInit(std::size_t size);
     int sceSslTerm(int ssl);
-    int sceHttpInit(int pool, int ssl, std::size_t size);
-    int sceHttpTerm(int http);
-    int sceHttpCreateTemplate(int http, const char *user_agent, int version, int flags);
-    int sceHttpDeleteTemplate(int tmpl);
-    int sceHttpSetAutoRedirect(int tmpl, int auto_redirect);
-    int sceHttpSetResolveTimeOut(int tmpl, std::uint32_t timeout_us);
-    int sceHttpsEnableOption(int tmpl, std::uint32_t options);
-    int sceHttpsDisableOption(int tmpl, std::uint32_t options);
-    int sceHttpCreateConnectionWithURL(int tmpl, const char *url, int flags);
-    int sceHttpDeleteConnection(int conn);
-    int sceHttpCreateRequestWithURL(int conn, int method, const char *url, std::uint64_t body_len);
-    int sceHttpDeleteRequest(int req);
-    int sceHttpAddRequestHeader(int req, const char *name, const char *value, std::uint32_t flags);
-    int sceHttpSendRequest(int req, const void *data, std::size_t size);
-    int sceHttpGetStatusCode(int req, int *status);
-    int sceHttpReadData(int req, void *data, std::size_t size);
-    int sceHttpAbortRequest(int req);
+    int sceHttp2Init(int pool, int ssl, std::size_t size, int flags);
+    int sceHttp2Term(int http);
+    int sceHttp2CreateTemplate(int http, const char *user_agent, int version, int flags);
+    int sceHttp2DeleteTemplate(int tmpl);
+    int sceHttp2CreateRequestWithURL(int tmpl, const char *method, const char *url, std::uint64_t body_len);
+    int sceHttp2DeleteRequest(int req);
+    int sceHttp2AddRequestHeader(int req, const char *name, const char *value, std::uint32_t flags);
+    int sceHttp2SendRequest(int req, const void *data, std::size_t size);
+    int sceHttp2GetStatusCode(int req, int *status);
+    int sceHttp2ReadData(int req, void *data, std::size_t size);
 }
 #endif
 
@@ -50,8 +43,8 @@ namespace
 
 constexpr const char *kClientAuthPath = "/data/MacheteSVG/google_auth.json";
 
-// Google OAuth 2.0 Client ID para aplicaciones limitadas / consolas (RFC 8628)
-constexpr const char *kGoogleClientId =
+// Default Client ID para Google Drive OAuth (flujo RFC 8628)
+constexpr const char *kDefaultGoogleClientId =
     "1072948625368-8091uonv7u96443cclb81tq15ebov74h.apps.googleusercontent.com";
 
 struct HttpResponse
@@ -61,7 +54,6 @@ struct HttpResponse
     std::string error;
 };
 
-// Extrae cadenas de un JSON simple sin dependencias externas
 std::string extract_json_string(const std::string &json, const std::string &key)
 {
     std::string pattern = "\"" + key + "\":\"";
@@ -102,7 +94,55 @@ int extract_json_int(const std::string &json, const std::string &key, int fallba
     return fallback;
 }
 
-// Ejecución HTTP robusta mediante el subsistema de red nativo de Sony PlayStation 5 (sceHttp)
+// Carga opcional de client_id desde archivo local para que el usuario pueda usar sus propias credenciales
+std::string get_effective_client_id()
+{
+    // 1. Verificar /data/MacheteSVG/client_id.txt
+    std::FILE *f = std::fopen("/data/MacheteSVG/client_id.txt", "r");
+    if (f)
+    {
+        char buf[256] = {0};
+        if (std::fgets(buf, sizeof(buf), f))
+        {
+            std::fclose(f);
+            std::string id = buf;
+            while (!id.empty() && (id.back() == '\r' || id.back() == '\n' || id.back() == ' '))
+                id.pop_back();
+            if (id.length() > 5)
+                return id;
+        }
+        else
+        {
+            std::fclose(f);
+        }
+    }
+
+    // 2. Verificar /data/MacheteSVG/credentials.json
+    std::FILE *fj = std::fopen("/data/MacheteSVG/credentials.json", "rb");
+    if (fj)
+    {
+        std::fseek(fj, 0, SEEK_END);
+        const long sz = std::ftell(fj);
+        std::fseek(fj, 0, SEEK_SET);
+        if (sz > 0 && sz < 32768)
+        {
+            std::string content(static_cast<std::size_t>(sz), '\0');
+            std::fread(content.data(), 1, content.size(), fj);
+            std::fclose(fj);
+            std::string cid = extract_json_string(content, "client_id");
+            if (cid.length() > 5)
+                return cid;
+        }
+        else
+        {
+            std::fclose(fj);
+        }
+    }
+
+    return kDefaultGoogleClientId;
+}
+
+// Ejecución HTTP2 nativa en PS5 mediante libSceHttp2
 HttpResponse execute_http_request(const std::string &url, int method, const std::string &body_data,
                                   const std::vector<std::pair<std::string, std::string>> &headers)
 {
@@ -119,96 +159,82 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
     {
         sceSysmoduleLoadModule(0x000c); // SCE_SYSMODULE_NET
         sceSysmoduleLoadModule(0x0017); // SCE_SYSMODULE_SSL
-        sceSysmoduleLoadModule(0x0015); // SCE_SYSMODULE_HTTP
         sceSysmoduleLoadModule(0x002c); // SCE_SYSMODULE_HTTP2
 
         (void)sceNetInit();
-        s_pool = sceNetPoolCreate("MacheteNet", 1024 * 1024, 0);
+        s_pool = sceNetPoolCreate("MacheteNet", 64 * 1024, 0);
         if (s_pool < 0)
         {
             resp.error = "Error al crear pool de red (0x" + std::to_string(s_pool) + ")";
             return resp;
         }
 
-        s_ssl = sceSslInit(2 * 1024 * 1024);
+        s_ssl = sceSslInit(512 * 1024);
         if (s_ssl < 0)
         {
             resp.error = "Error al inicializar SSL (0x" + std::to_string(s_ssl) + ")";
             return resp;
         }
 
-        s_http = sceHttpInit(s_pool, s_ssl, 4 * 1024 * 1024);
+        s_http = sceHttp2Init(s_pool, s_ssl, 512 * 1024, 1);
         if (s_http < 0)
         {
-            resp.error = "Error al inicializar sceHttp (0x" + std::to_string(s_http) + ")";
+            resp.error = "Error al inicializar sceHttp2 (0x" + std::to_string(s_http) + ")";
             return resp;
         }
     }
 
-    int tmpl = sceHttpCreateTemplate(s_http, "MacheteSVG-PS5/1.0.0", 2, 0);
+    int tmpl = sceHttp2CreateTemplate(s_http, "MacheteSVG-PS5/1.0.0", 3, 1);
     if (tmpl >= 0)
     {
-        sceHttpSetAutoRedirect(tmpl, 1);
-        sceHttpSetResolveTimeOut(tmpl, 8'000'000);
-        sceHttpsDisableOption(tmpl, 0x01); // Desactivar verificacion estricta CA de Sony para compatibilidad
-        sceHttpsEnableOption(tmpl, 0x04 | 0x08 | 0x10 | 0x20 | 0x80);
-
-        int conn = sceHttpCreateConnectionWithURL(tmpl, url.c_str(), 0);
-        if (conn >= 0)
+        const char *method_str = (method == 1) ? "POST" : "GET";
+        int req = sceHttp2CreateRequestWithURL(tmpl, method_str, url.c_str(), 0);
+        if (req >= 0)
         {
-            int req = sceHttpCreateRequestWithURL(conn, method, url.c_str(), body_data.size());
-            if (req >= 0)
+            for (const auto &h : headers)
             {
-                for (const auto &h : headers)
-                {
-                    sceHttpAddRequestHeader(req, h.first.c_str(), h.second.c_str(), 0);
-                }
+                sceHttp2AddRequestHeader(req, h.first.c_str(), h.second.c_str(), 0);
+            }
 
-                int send_res = sceHttpSendRequest(
-                    req, body_data.empty() ? nullptr : body_data.data(), body_data.size());
-                if (send_res >= 0)
-                {
-                    int status_code = 0;
-                    sceHttpGetStatusCode(req, &status_code);
-                    resp.status = status_code;
+            int send_res = sceHttp2SendRequest(
+                req, body_data.empty() ? nullptr : body_data.data(), body_data.size());
+            if (send_res >= 0)
+            {
+                int status_code = 0;
+                sceHttp2GetStatusCode(req, &status_code);
+                resp.status = status_code;
 
-                    char buffer[16384];
-                    for (;;)
-                    {
-                        int read_bytes = sceHttpReadData(req, buffer, sizeof(buffer));
-                        if (read_bytes <= 0)
-                            break;
-                        resp.body.append(buffer, static_cast<std::size_t>(read_bytes));
-                        if (resp.body.size() > 4 * 1024 * 1024)
-                            break; // Limite de 4MB por respuesta
-                    }
-                }
-                else
+                char buffer[16384];
+                for (;;)
                 {
-                    resp.error = "Fallo de conexion o resolucion DNS (sceHttpSendRequest: " +
-                                 std::to_string(send_res) + ")";
+                    int read_bytes = sceHttp2ReadData(req, buffer, sizeof(buffer));
+                    if (read_bytes <= 0)
+                        break;
+                    resp.body.append(buffer, static_cast<std::size_t>(read_bytes));
+                    if (resp.body.size() > 4 * 1024 * 1024)
+                        break; // Límite de 4MB por respuesta
                 }
-                sceHttpDeleteRequest(req);
             }
             else
             {
-                resp.error = "Error al crear peticion HTTP";
+                resp.error = "Fallo de conexión o resolución DNS (sceHttp2SendRequest: " +
+                             std::to_string(send_res) + ")";
             }
-            sceHttpDeleteConnection(conn);
+            sceHttp2DeleteRequest(req);
         }
         else
         {
-            resp.error = "Error al conectar a la URL remota";
+            resp.error = "Error al crear petición HTTP2";
         }
-        sceHttpDeleteTemplate(tmpl);
+        sceHttp2DeleteTemplate(tmpl);
     }
     else
     {
-        resp.error = "Error al crear plantilla HTTP";
+        resp.error = "Error al crear plantilla HTTP2";
     }
 
 #else
-    // Fallback en entorno Host (pruebas de escritorio sin hardware PS5)
+    // Fallback para pruebas de escritorio sin hardware PS5
     (void)method;
     (void)body_data;
     (void)headers;
@@ -222,7 +248,8 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
     else if (url.find("token") != std::string::npos)
     {
         resp.status = 200;
-        resp.body = "{\"access_token\":\"ya29.host_test_token\",\"refresh_token\":\"1//host_refresh\","
+        resp.body = "{\"access_token\":\"ya29.host_valid_token_3847293847293847\","
+                    "\"refresh_token\":\"1//host_valid_refresh_token_29384729384729\","
                     "\"expires_in\":3600}";
     }
     else
@@ -250,6 +277,12 @@ GoogleDrive::GoogleDrive()
 
 GoogleDrive::~GoogleDrive()
 {
+    cancel_auth();
+}
+
+bool GoogleDrive::is_authorized() const
+{
+    return auth_state_.load() == AuthState::Authorized;
 }
 
 std::string GoogleDrive::last_error() const
@@ -264,15 +297,16 @@ std::string GoogleDrive::user_code() const
     return user_code_;
 }
 
-bool GoogleDrive::is_authorized() const
+bool GoogleDrive::clean_invalid_credentials()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (auth_state_.load() != AuthState::Authorized)
-        return false;
-    if (refresh_token_.empty() || refresh_token_.length() < 10)
-        return false;
-    if (refresh_token_.find("host_") != std::string::npos)
-        return false;
+    access_token_.clear();
+    refresh_token_.clear();
+    root_folder_id_.clear();
+    user_code_.clear();
+    last_error_.clear();
+    auth_state_.store(AuthState::Unauthenticated);
+    std::remove(kClientAuthPath);
     return true;
 }
 
@@ -290,9 +324,10 @@ bool GoogleDrive::load_tokens()
     const long file_size = std::ftell(file);
     std::fseek(file, 0, SEEK_SET);
 
-    if (file_size <= 0)
+    if (file_size <= 0 || file_size > 16384)
     {
         std::fclose(file);
+        std::remove(kClientAuthPath);
         auth_state_.store(AuthState::Unauthenticated);
         return false;
     }
@@ -307,8 +342,11 @@ bool GoogleDrive::load_tokens()
     refresh_token_ = extract_json_string(content, "refresh_token");
     root_folder_id_ = extract_json_string(content, "root_folder_id");
 
-    // Descartar tokens de prueba o corruptos
-    if (refresh_token_.find("host_") != std::string::npos || refresh_token_.length() < 10)
+    // Descartar tokens mock, tokens ficticios de prueba o cadenas corruptas
+    if (refresh_token_.empty() ||
+        refresh_token_.find("mock") != std::string::npos ||
+        refresh_token_.find("host_") != std::string::npos ||
+        refresh_token_.length() < 20)
     {
         refresh_token_.clear();
         access_token_.clear();
@@ -318,14 +356,9 @@ bool GoogleDrive::load_tokens()
         return false;
     }
 
-    if (!refresh_token_.empty())
-    {
-        auth_state_.store(AuthState::Authorized);
-        return true;
-    }
-
-    auth_state_.store(AuthState::Unauthenticated);
-    return false;
+    // Token con formato legítimo detectado
+    auth_state_.store(AuthState::Authorized);
+    return true;
 }
 
 bool GoogleDrive::save_tokens()
@@ -347,18 +380,15 @@ bool GoogleDrive::save_tokens()
 
 void GoogleDrive::logout()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    access_token_.clear();
-    refresh_token_.clear();
-    root_folder_id_.clear();
-    user_code_.clear();
-    auth_state_.store(AuthState::Unauthenticated);
-    std::remove(kClientAuthPath);
+    clean_invalid_credentials();
 }
 
 void GoogleDrive::cancel_auth()
 {
+    auth_cancelled_.store(true);
     auth_state_.store(AuthState::Unauthenticated);
+    std::lock_guard<std::mutex> lock(mutex_);
+    user_code_.clear();
 }
 
 bool GoogleDrive::refresh_access_token()
@@ -371,7 +401,8 @@ bool GoogleDrive::refresh_access_token()
         r_token = refresh_token_;
     }
 
-    const std::string body = "client_id=" + std::string(kGoogleClientId) +
+    const std::string client_id = get_effective_client_id();
+    const std::string body = "client_id=" + client_id +
                              "&refresh_token=" + r_token +
                              "&grant_type=refresh_token";
 
@@ -397,6 +428,7 @@ bool GoogleDrive::refresh_access_token()
 
 void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> on_code_received)
 {
+    auth_cancelled_.store(false);
     auth_state_.store(AuthState::RequestingCode);
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -408,10 +440,11 @@ void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> 
         [this, on_code_received]()
         {
             const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+            const std::string client_id = get_effective_client_id();
 
-            // 1. Petición inicial RFC 8628 Device Authorization a Google
+            // Petición inicial RFC 8628 Device Authorization a Google
             const std::string post_body =
-                "client_id=" + std::string(kGoogleClientId) +
+                "client_id=" + client_id +
                 "&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fdrive.file";
 
             std::vector<std::pair<std::string, std::string>> headers = {
@@ -421,18 +454,35 @@ void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> 
             HttpResponse resp = execute_http_request(
                 "https://oauth2.googleapis.com/device/code", 1, post_body, headers);
 
+            if (auth_cancelled_.load())
+                return;
+
             if (resp.status != 200 || resp.body.empty())
             {
-                std::lock_guard<std::mutex> lock(mutex_);
-                last_error_ = is_es
-                                  ? ("Fallo de red al conectar con Google: " +
-                                     (resp.error.empty() ? ("HTTP " + std::to_string(resp.status))
-                                                         : resp.error))
-                                  : ("Network failure connecting to Google: " +
-                                     (resp.error.empty() ? ("HTTP " + std::to_string(resp.status))
-                                                         : resp.error));
-                user_code_ = is_es ? "ERROR DE RED" : "NETWORK ERROR";
                 auth_state_.store(AuthState::Error);
+                std::lock_guard<std::mutex> lock(mutex_);
+                std::string err_str = extract_json_string(resp.body, "error");
+
+                if (err_str == "restricted_client" || err_str == "invalid_client" ||
+                    err_str == "unauthorized_client")
+                {
+                    last_error_ = is_es
+                        ? "Google Drive requiere credenciales. Coloca client_id.txt en /data/MacheteSVG/"
+                        : "Google Drive requires setup. Place client_id.txt in /data/MacheteSVG/";
+                    user_code_ = is_es ? "CONFIGURAR" : "CONFIGURE";
+                }
+                else if (!resp.error.empty())
+                {
+                    last_error_ = is_es ? "Sin conexion a la red en la consola"
+                                        : "No network connection on console";
+                    user_code_ = is_es ? "SIN RED" : "OFFLINE";
+                }
+                else
+                {
+                    last_error_ = is_es ? ("Error Google OAuth (" + std::to_string(resp.status) + ")")
+                                        : ("Google OAuth error (" + std::to_string(resp.status) + ")");
+                    user_code_ = is_es ? "ERROR OAUTH" : "OAUTH ERROR";
+                }
                 return;
             }
 
@@ -449,11 +499,11 @@ void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> 
 
             if (info.user_code.empty() || info.device_code.empty())
             {
-                std::lock_guard<std::mutex> lock(mutex_);
-                last_error_ = is_es ? "Respuesta inválida de Google OAuth"
-                                    : "Invalid response from Google OAuth";
-                user_code_ = is_es ? "ERROR DE RESPUESTA" : "RESPONSE ERROR";
                 auth_state_.store(AuthState::Error);
+                std::lock_guard<std::mutex> lock(mutex_);
+                last_error_ = is_es ? "Respuesta inesperada de Google"
+                                    : "Unexpected response from Google";
+                user_code_ = is_es ? "ERROR" : "ERROR";
                 return;
             }
 
@@ -466,20 +516,24 @@ void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> 
             if (on_code_received)
                 on_code_received(info);
 
-            // 2. Bucle de sondeo (polling loop) esperando la aprobación del usuario
-            const int max_attempts = info.expires_in / info.interval;
+            // Bucle de sondeo (polling loop) esperando autorización del usuario en navegador
+            const int interval_sec = std::max(info.interval, 5);
+            const int max_attempts = info.expires_in / interval_sec;
+
             for (int i = 0; i < max_attempts; ++i)
             {
-                if (auth_state_.load() != AuthState::WaitingForUser)
-                    return;
+                for (int s = 0; s < interval_sec; ++s)
+                {
+                    if (auth_cancelled_.load() || auth_state_.load() != AuthState::WaitingForUser)
+                        return;
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                }
 
-                std::this_thread::sleep_for(std::chrono::seconds(info.interval));
-
-                if (auth_state_.load() != AuthState::WaitingForUser)
+                if (auth_cancelled_.load() || auth_state_.load() != AuthState::WaitingForUser)
                     return;
 
                 const std::string token_body =
-                    "client_id=" + std::string(kGoogleClientId) +
+                    "client_id=" + client_id +
                     "&device_code=" + info.device_code +
                     "&grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code";
 
@@ -506,7 +560,6 @@ void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> 
                 }
                 else
                 {
-                    // Si el error es distinto de "authorization_pending", evaluar expiración
                     std::string err = extract_json_string(token_resp.body, "error");
                     if (err == "expired_token")
                     {
@@ -553,7 +606,6 @@ void GoogleDrive::backup_save(const std::string &title_id, const std::string &ga
             sync_progress_.store(0.4f);
             sync_state_.store(SyncState::Uploading);
 
-            // Subir archivo a la API de Drive
             std::string token;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -565,7 +617,6 @@ void GoogleDrive::backup_save(const std::string &title_id, const std::string &ga
                 {"Content-Type", "application/octet-stream"},
             };
 
-            // Preparar metadatos o archivo de respaldo
             std::string payload;
             if (!local_save_path.empty())
             {
@@ -608,8 +659,9 @@ void GoogleDrive::backup_save(const std::string &title_id, const std::string &ga
 void GoogleDrive::list_saves(const std::string &title_id, const std::string &game_name,
                              std::function<void(const std::vector<CloudFile> &files)> on_complete)
 {
+    (void)game_name;
     std::thread(
-        [this, on_complete, title_id, game_name]()
+        [this, on_complete, title_id]()
         {
             std::vector<CloudFile> files;
 
@@ -631,7 +683,6 @@ void GoogleDrive::list_saves(const std::string &title_id, const std::string &gam
                 HttpResponse resp = execute_http_request(list_url, 0, "", headers);
                 if (resp.status == 200)
                 {
-                    // Archivo encontrado en Drive
                     CloudFile file;
                     file.id = extract_json_string(resp.body, "id");
                     file.name = extract_json_string(resp.body, "name");
@@ -653,11 +704,12 @@ void GoogleDrive::restore_save(
     const std::string &cloud_file_id, const std::string &dest_local_path,
     std::function<void(bool success, const std::string &msg)> on_complete)
 {
+    (void)dest_local_path;
     sync_state_.store(SyncState::Downloading);
     sync_progress_.store(0.2f);
 
     std::thread(
-        [this, cloud_file_id, dest_local_path, on_complete]()
+        [this, cloud_file_id, on_complete]()
         {
             const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
 

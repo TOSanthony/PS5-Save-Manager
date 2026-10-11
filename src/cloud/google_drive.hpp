@@ -63,6 +63,7 @@ class GoogleDrive
     void cancel_auth();
     bool is_authorized() const;
     void logout();
+    bool clean_invalid_credentials();
 
     AuthState auth_state() const
     {
@@ -104,6 +105,7 @@ class GoogleDrive
     std::atomic<AuthState> auth_state_{AuthState::Unauthenticated};
     std::atomic<SyncState> sync_state_{SyncState::Idle};
     std::atomic<float> sync_progress_{0.0f};
+    std::atomic<bool> auth_cancelled_{false};
 
     std::string access_token_;
     std::string refresh_token_;

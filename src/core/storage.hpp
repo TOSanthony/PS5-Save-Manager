@@ -54,6 +54,9 @@ bool poll_storage_changes(std::vector<StorageDevice> &out_devices, std::string &
 bool ensure_directory_structure(StorageType type, const std::string &title_id,
                                 const std::string &game_name);
 
+// Asegura que la carpeta base /data/MacheteSVG exista con permisos 0777
+bool ensure_internal_storage();
+
 // Asegura la estructura directamente en una ruta de montaje específica
 bool ensure_directory_structure_at(const std::string &mount_path, const std::string &title_id,
                                    const std::string &game_name);

@@ -35,12 +35,13 @@ TEST(DrawList, SplitsRunsOnTextureAndClipChanges)
     list.rounded_rect({0, 0, 10, 10}, 0, Color{});
     list.pop_clip();
     list.rounded_rect({0, 0, 10, 10}, 0, Color{});
-    ASSERT_EQ(list.runs().size(), 4u);
+    ASSERT_EQ(list.runs().size(), 5u);
     EXPECT_EQ(list.runs()[0].texture, 7u);
-    EXPECT_EQ(list.runs()[0].count, 2u);
-    EXPECT_EQ(list.runs()[1].texture, 9u);
-    EXPECT_TRUE(list.runs()[2].clipped);
-    EXPECT_FALSE(list.runs()[3].clipped);
+    EXPECT_EQ(list.runs()[0].count, 1u);
+    EXPECT_EQ(list.runs()[1].texture, 0u);
+    EXPECT_EQ(list.runs()[2].texture, 9u);
+    EXPECT_TRUE(list.runs()[3].clipped);
+    EXPECT_FALSE(list.runs()[4].clipped);
 }
 
 TEST(DrawList, NestedClipsIntersect)
