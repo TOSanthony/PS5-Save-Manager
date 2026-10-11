@@ -1,4 +1,4 @@
-# Release Notes: MacheteSVG v1.0.0 / Notas de la Versión v1.0.0
+# Release Notes: MacheteSVG v1.0.0 (Pre-release / Technical Preview) / Notas de la Versión v1.0.0 (Pre-release / Vista Previa Técnica)
 
 ![MacheteSVG Banner](https://raw.githubusercontent.com/VenezuelanBiggie24/MacheteSVG-PS5-Save-Manager/main/docs/screenshots/banner.png)
 
@@ -6,8 +6,21 @@
 
 ## English Documentation
 
+### Technical Preview Notice
+This release is an official public pre-release / technical preview build intended for testing and validation across jailbroken PlayStation 5 consoles.
+
+While core mechanics and UI rendering are fully operational, several advanced subsystems are currently undergoing active real-hardware stabilization:
+- Full icon decoding throughput and memory caching for large game libraries.
+- Sanitization and filtering of non-Latin / Unicode characters in game titles and directory trees.
+- Background asynchronous file copying pipeline and progress reporting.
+- Google Drive cloud synchronization device flow and upload/download queue reliability.
+
+Active engineering is underway on these areas to ensure rock-solid stability, zero lockups, and optimal performance. A comprehensive update incorporating all final fixes and full functionality will be released in the upcoming version.
+
+---
+
 ### Overview
-MacheteSVG v1.0.0 is the initial public release of the native PlayStation 5 and PlayStation 4 Savegame Manager and Cloud Sync utility for jailbroken PlayStation 5 consoles.
+MacheteSVG v1.0.0 is the initial public technical preview of the native PlayStation 5 and PlayStation 4 Savegame Manager and Cloud Sync utility for jailbroken PlayStation 5 consoles.
 
 Built with a hardware-accelerated OpenGL 4.6 SDF renderer, MacheteSVG delivers a fluid 60 FPS "Liquid Glass" interface paired with cryptographic savefile safety features designed to prevent save corruption (`CE-108255-1`) and enable auto-resigning across accounts.
 
@@ -83,6 +96,19 @@ All package files are validated with open-mode permissions (`0777`) for out-of-t
 ---
 
 ## Notas de la Versión en Español (Spanish Documentation)
+
+### Aviso de Vista Previa Técnica
+Esta entrega es una versión pública preliminar (pre-release / technical preview) destinada a la validación y pruebas directas en consolas PlayStation 5 con jailbreak.
+
+Si bien las funciones esenciales y el motor de renderizado de interfaz son totalmente operativos, existen módulos que se encuentran en proceso activo de estabilización sobre hardware real:
+- Tasa y rendimiento completo de decodificación de iconos y gestión de memoria para librerías con gran cantidad de juegos.
+- Filtrado y saneamiento de caracteres no latinos / Unicode en títulos y rutas del sistema de archivos.
+- Tubería de copias de seguridad en segundo plano y reporte reactivo de progreso.
+- Sincronización en la nube con Google Drive (flujo de autorización e hilos de transferencia).
+
+Se está trabajando intensamente en optimizar y corregir cada uno de estos aspectos para garantizar máxima solidez, fluidez absoluta y ausencia total de bloqueos. La siguiente versión integrará todas estas mejoras de manera definitiva.
+
+---
 
 ### Resumen General
 MacheteSVG v1.0.0 es la versión pública inicial del administrador de partidas guardadas de PlayStation 5 y PlayStation 4 con sincronización en la nube para consolas PlayStation 5 con jailbreak.
