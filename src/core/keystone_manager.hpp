@@ -18,10 +18,17 @@ namespace machete::keystone
 
 constexpr std::size_t KEYSTONE_SIZE = 96; // 0x60 bytes
 
-// Busca el keystone autentico de la aplicacion instalada en la consola
 inline std::string find_authentic_game_keystone(const std::string &title_id)
 {
     const std::vector<std::string> candidates = {
+        "/user/app/" + title_id + "/sce_sys/keystone",
+        "/user/app/" + title_id + "/keystone",
+        "/mnt/ext0/user/app/" + title_id + "/sce_sys/keystone",
+        "/mnt/ext0/user/app/" + title_id + "/keystone",
+        "/mnt/ext1/user/app/" + title_id + "/sce_sys/keystone",
+        "/mnt/ext1/user/app/" + title_id + "/keystone",
+        "/system_data/priv/appmeta/" + title_id + "/sce_sys/keystone",
+        "/system_data/priv/appmeta/" + title_id + "/keystone",
         "/user/appmeta/" + title_id + "/sce_sys/keystone",
         "/user/appmeta/" + title_id + "/keystone",
         "/mnt/ext0/user/appmeta/" + title_id + "/sce_sys/keystone",
@@ -32,18 +39,21 @@ inline std::string find_authentic_game_keystone(const std::string &title_id)
     for (const auto &p : candidates)
     {
         if (access(p.c_str(), R_OK) == 0)
+        {
+            MACHETE_LOG("[KEYSTONE]", "Keystone autentico localizado en: %s", p.c_str());
             return p;
+        }
     }
     return "";
 }
 
-// Inyecta el keystone autentico en el directorio de guardado restaurado
+// Inyecta el keystone autentico en el directorio de guardado restaurado y lo respalda en la boveda local
 inline bool inject_authentic_keystone(const std::string &save_dir, const std::string &title_id)
 {
     const std::string authentic_src = find_authentic_game_keystone(title_id);
     if (authentic_src.empty())
     {
-        MACHETE_LOG("[KEYSTONE]", "Aviso: No se localizo keystone autentico en appmeta para %s", title_id.c_str());
+        MACHETE_LOG("[KEYSTONE]", "Aviso: No se localizo keystone autentico en appmeta ni app para %s", title_id.c_str());
         return false;
     }
 
@@ -78,6 +88,18 @@ inline bool inject_authentic_keystone(const std::string &save_dir, const std::st
     }
     std::fclose(fout);
     (void)chmod(dest_keystone.c_str(), 0666);
+
+    // Guardar copia permanente en la bóveda de keystones
+    (void)mkdir("/data/MacheteSVG", 0777);
+    (void)mkdir("/data/MacheteSVG/keystones", 0777);
+    const std::string cache_keystone = "/data/MacheteSVG/keystones/" + title_id + ".keystone";
+    std::FILE *fcache = std::fopen(cache_keystone.c_str(), "wb");
+    if (fcache)
+    {
+        std::fwrite(buffer, 1, KEYSTONE_SIZE, fcache);
+        std::fclose(fcache);
+        (void)chmod(cache_keystone.c_str(), 0666);
+    }
 
     MACHETE_LOG("[KEYSTONE]", "Keystone autentico inyectado con exito en %s (desde %s)",
                 dest_keystone.c_str(), authentic_src.c_str());

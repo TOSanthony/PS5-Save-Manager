@@ -27,6 +27,8 @@ extern "C"
     int sceSslSend(int connId, const void *data, std::size_t size, int flags);
     int sceSslRecv(int connId, void *data, std::size_t size, int flags);
     int sceSslDisableOption(int connId, std::uint32_t options);
+    int sceSslDisableVerifyOption(int connId, std::uint32_t options);
+    int sceSslSetVerifyCallback(int connId, int (*cb)(int connId, void *user_arg), void *user_arg);
 }
 #endif
 
@@ -102,13 +104,16 @@ SslHttpResponse SslHttpClient::request(
         return resp;
     }
 
-    // Deshabilitar verificacion estricta si no estan los certificados locales de Google
-    (void)sceSslDisableOption(sslConn, 0x1F);
+    // Deshabilitar verificacion estricta y registrar callback permisivo para Google APIs
+    (void)sceSslDisableOption(sslConn, 0xFFFFFFFF);
+    (void)sceSslDisableVerifyOption(sslConn, 0xFFFFFFFF);
+    (void)sceSslSetVerifyCallback(sslConn, [](int, void *) -> int { return 0; }, nullptr);
 
     // 4. Apretar manos TLS (Handshake con SNI = hostname)
     int sslRes = sceSslConnect(sslConn);
     if (sslRes < 0)
     {
+        MACHETE_LOG("[SSL-HTTP]", "sceSslConnect fallo: %d (0x%x)", sslRes, static_cast<unsigned int>(sslRes));
         sceSslDeleteConnection(sslConn);
         close(sock);
         resp.error = "Apreton TLS sceSslConnect fallo (" + std::to_string(sslRes) + ")";

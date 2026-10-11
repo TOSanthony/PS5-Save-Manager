@@ -97,6 +97,17 @@ inline bool archive_crypto_vault(const std::string &dest_folder,
     std::strncpy(record.title_id, title_id.c_str(), sizeof(record.title_id) - 1);
     std::strncpy(record.platform, platform.c_str(), sizeof(record.platform) - 1);
 
+    for (const char *psid_path : {"/system_data/priv/cache/openpsid.dat", "/system_data/priv/home/openpsid.dat"})
+    {
+        std::FILE *fpsid = std::fopen(psid_path, "rb");
+        if (fpsid)
+        {
+            (void)std::fread(record.open_psid, 1, 16, fpsid);
+            std::fclose(fpsid);
+            break;
+        }
+    }
+
     bool has_sealed = false;
 
     // 1. Extraer el blob sellado

@@ -1,0 +1,136 @@
+// MacheteSVG - Account ID Discovery & Alignment Manager
+// Copyright (C) 2026 MacheteSVG Team
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#pragma once
+
+#include "core/logger.hpp"
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <dirent.h>
+#include <string>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <vector>
+
+namespace machete::account
+{
+
+// Lee un Account ID de 64 bits de un archivo binario si no es 0
+inline std::uint64_t read_account_id_from_file(const std::string &path, off_t offset)
+{
+    std::FILE *f = std::fopen(path.c_str(), "rb");
+    if (!f)
+        return 0;
+
+    if (fseek(f, offset, SEEK_SET) != 0)
+    {
+        std::fclose(f);
+        return 0;
+    }
+
+    std::uint64_t val = 0;
+    if (std::fread(&val, 1, sizeof(val), f) != sizeof(val))
+    {
+        std::fclose(f);
+        return 0;
+    }
+    std::fclose(f);
+    return val;
+}
+
+// Busca el Account ID legítimo activo en la consola para el usuario
+inline std::uint64_t detect_active_account_id(std::uint32_t user_id)
+{
+    char uid_hex[32];
+    std::snprintf(uid_hex, sizeof(uid_hex), "%x", user_id);
+
+    // 1. Probar en las rutas del sistema (/system_data/priv/home/<uid>/)
+    const std::vector<std::pair<std::string, off_t>> sys_paths = {
+        {"/system_data/priv/home/" + std::string(uid_hex) + "/auth.dat", 0x10},
+        {"/system_data/priv/home/" + std::string(uid_hex) + "/auth.dat", 0x08},
+        {"/system_data/priv/home/" + std::string(uid_hex) + "/account.dat", 0x00},
+        {"/system_data/priv/home/" + std::string(uid_hex) + "/user.dat", 0x20}};
+
+    for (const auto &sp : sys_paths)
+    {
+        std::uint64_t acc = read_account_id_from_file(sp.first, sp.second);
+        if (acc != 0 && acc != ~0ULL)
+        {
+            MACHETE_LOG("[ACCOUNT]", "Account ID detectado en %s (offset 0x%lx): 0x%016llx",
+                        sp.first.c_str(), static_cast<unsigned long>(sp.second),
+                        static_cast<unsigned long long>(acc));
+            return acc;
+        }
+    }
+
+    // 2. Probar en partidas existentes de PS4 (/user/home/<uid>/savedata/*/param.sfo)
+    const std::string sdata_dir = "/user/home/" + std::string(uid_hex) + "/savedata";
+    DIR *dir = opendir(sdata_dir.c_str());
+    if (dir)
+    {
+        while (const dirent *ent = readdir(dir))
+        {
+            if (ent->d_name[0] == '.')
+                continue;
+            const std::string sfo = sdata_dir + "/" + ent->d_name + "/sce_sys/param.sfo";
+            if (access(sfo.c_str(), R_OK) == 0)
+            {
+                // Buscar la cadena ACCOUNT_ID dentro de param.sfo
+                std::FILE *f = std::fopen(sfo.c_str(), "rb");
+                if (f)
+                {
+                    std::vector<char> buf(8192);
+                    std::size_t n = std::fread(buf.data(), 1, buf.size(), f);
+                    std::fclose(f);
+                    for (std::size_t i = 0; i + 24 < n; i++)
+                    {
+                        if (std::memcmp(buf.data() + i, "ACCOUNT_ID", 10) == 0)
+                        {
+                            // En SFO, tras el tag suele venir el valor en hex (16 chars)
+                            for (std::size_t j = i + 10; j + 16 <= n; j++)
+                            {
+                                bool is_hex = true;
+                                for (int k = 0; k < 16; k++)
+                                {
+                                    char c = buf[j + k];
+                                    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+                                    {
+                                        is_hex = false;
+                                        break;
+                                    }
+                                }
+                                if (is_hex)
+                                {
+                                    std::string hex_str(buf.data() + j, 16);
+                                    std::uint64_t acc = std::strtoull(hex_str.c_str(), nullptr, 16);
+                                    if (acc != 0)
+                                    {
+                                        MACHETE_LOG("[ACCOUNT]", "Account ID recuperado de SFO existente (%s): 0x%016llx",
+                                                    sfo.c_str(), static_cast<unsigned long long>(acc));
+                                        closedir(dir);
+                                        return acc;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        closedir(dir);
+    }
+
+    // 3. Si no hay otra referencia, fallback seguro basado en el User ID
+    std::uint64_t fallback_acc = (static_cast<std::uint64_t>(user_id) << 32) | user_id;
+    if (fallback_acc == 0)
+        fallback_acc = 0x0100000000000001ULL;
+
+    MACHETE_LOG("[ACCOUNT]", "Usando Account ID calculado para UserID 0x%x: 0x%016llx",
+                user_id, static_cast<unsigned long long>(fallback_acc));
+    return fallback_acc;
+}
+
+} // namespace machete::account

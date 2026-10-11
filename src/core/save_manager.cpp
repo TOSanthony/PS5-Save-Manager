@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "core/save_manager.hpp"
+#include "core/account_manager.hpp"
 #include "core/i18n.hpp"
 #include "core/jailbreak.hpp"
 #include "core/keystone_manager.hpp"
@@ -346,6 +347,95 @@ void apply_permissions_recursive(const std::string &path, uid_t uid = 0, gid_t g
     }
 }
 
+void reconstruct_prospero_metadata(const std::string &title_id,
+                                   const std::string &dst_target,
+                                   const std::string &meta_target,
+                                   uid_t target_uid, gid_t target_gid)
+{
+    MACHETE_LOG("[RESTORE]", "Reconstruyendo metadatos Prospero para %s en %s...",
+                title_id.c_str(), meta_target.c_str());
+
+    // 1. Copiar icon0.png del juego instalado si existe
+    const std::vector<std::string> icon_candidates = {
+        "/user/app/" + title_id + "/sce_sys/icon0.png",
+        "/mnt/ext0/user/app/" + title_id + "/sce_sys/icon0.png",
+        "/mnt/ext1/user/app/" + title_id + "/sce_sys/icon0.png",
+        "/user/appmeta/" + title_id + "/icon0.png",
+        "/user/appmeta/" + title_id + "/sce_sys/icon0.png",
+        "/system_data/priv/appmeta/" + title_id + "/icon0.png"};
+
+    std::string found_icon;
+    for (const auto &ic : icon_candidates)
+    {
+        if (access(ic.c_str(), R_OK) == 0)
+        {
+            found_icon = ic;
+            break;
+        }
+    }
+
+    if (!found_icon.empty())
+    {
+        const std::string dst_icon = meta_target + "/icon0.png";
+        std::uint64_t b = 0;
+        int fc = 0;
+        copy_file_with_fsync(found_icon, dst_icon, b, 0, fc, nullptr, target_uid, target_gid);
+        MACHETE_LOG("[RESTORE]", "Icono reconstruido en %s (desde %s)", dst_icon.c_str(), found_icon.c_str());
+    }
+
+    // 2. Copiar param.json del juego si existe
+    const std::vector<std::string> param_candidates = {
+        "/user/app/" + title_id + "/sce_sys/param.json",
+        "/mnt/ext0/user/app/" + title_id + "/sce_sys/param.json",
+        "/mnt/ext1/user/app/" + title_id + "/sce_sys/param.json",
+        "/user/appmeta/" + title_id + "/param.json",
+        "/user/appmeta/" + title_id + "/sce_sys/param.json",
+        "/system_data/priv/appmeta/" + title_id + "/param.json"};
+
+    std::string found_param;
+    for (const auto &pc : param_candidates)
+    {
+        if (access(pc.c_str(), R_OK) == 0)
+        {
+            found_param = pc;
+            break;
+        }
+    }
+
+    if (!found_param.empty())
+    {
+        const std::string dst_param = meta_target + "/param.json";
+        std::uint64_t b = 0;
+        int fc = 0;
+        copy_file_with_fsync(found_param, dst_param, b, 0, fc, nullptr, target_uid, target_gid);
+        MACHETE_LOG("[RESTORE]", "Parametros reconstruidos en %s (desde %s)", dst_param.c_str(), found_param.c_str());
+    }
+
+    // 3. Para cada sdimg_<slot> en dst_target, asociar icono complementario si está disponible
+    DIR *dir = opendir(dst_target.c_str());
+    if (dir)
+    {
+        while (const dirent *ent = readdir(dir))
+        {
+            if (std::strncmp(ent->d_name, "sdimg_", 6) == 0)
+            {
+                std::string slot_name = ent->d_name + 6;
+                if (slot_name.rfind("sce_bu_", 0) != 0 && !found_icon.empty())
+                {
+                    const std::string slot_icon = meta_target + "/" + slot_name + ".png";
+                    if (access(slot_icon.c_str(), F_OK) != 0)
+                    {
+                        std::uint64_t b = 0;
+                        int fc = 0;
+                        copy_file_with_fsync(found_icon, slot_icon, b, 0, fc, nullptr, target_uid, target_gid);
+                    }
+                }
+            }
+        }
+        closedir(dir);
+    }
+}
+
 void post_process_restored_save(const scanner::ScannedGame &game,
                                 const std::string &dst_target,
                                 const std::string &backup_folder,
@@ -387,7 +477,28 @@ void post_process_restored_save(const scanner::ScannedGame &game,
         else
         {
             ensure_directories_recursive(meta_target, target_uid, target_gid);
-            MACHETE_LOG("[RESTORE]", "Carpeta de metadatos asegurada en %s (sin .meta en respaldo previo)", meta_target.c_str());
+            // Verificar si meta_target ya tiene archivos legítimos generados por la consola (Dummy Save)
+            int existing_meta_count = 0;
+            DIR *dmeta = opendir(meta_target.c_str());
+            if (dmeta)
+            {
+                while (const dirent *me = readdir(dmeta))
+                {
+                    if (me->d_name[0] != '.')
+                        existing_meta_count++;
+                }
+                closedir(dmeta);
+            }
+
+            if (existing_meta_count > 0)
+            {
+                MACHETE_LOG("[RESTORE]", "Metadatos existentes preservados en %s (%d archivos - Dummy Save protegido)",
+                            meta_target.c_str(), existing_meta_count);
+            }
+            else
+            {
+                reconstruct_prospero_metadata(game.title_id, dst_target, meta_target, target_uid, target_gid);
+            }
         }
 
         apply_permissions_recursive(meta_target, target_uid, target_gid);
@@ -399,9 +510,11 @@ void post_process_restored_save(const scanner::ScannedGame &game,
         (void)machete::keystone::inject_authentic_keystone(dst_target, game.title_id);
 
         std::uint32_t user_id = extract_user_id_from_path(dst_target);
+        std::uint64_t active_account_id = machete::account::detect_active_account_id(user_id);
+
         machete::sfo::ResignParams rp;
         rp.target_user_id = user_id;
-        rp.target_account_id = static_cast<std::uint64_t>(user_id);
+        rp.target_account_id = active_account_id;
 
         for (const std::string &sfo_path : {
                  dst_target + "/param.sfo",
@@ -412,8 +525,8 @@ void post_process_restored_save(const scanner::ScannedGame &game,
             {
                 if (machete::sfo::resign_param_sfo(sfo_path, rp))
                 {
-                    MACHETE_LOG("[RESTORE]", "param.sfo resignado exitosamente con UserID=0x%08x en %s",
-                                user_id, sfo_path.c_str());
+                    MACHETE_LOG("[RESTORE]", "param.sfo resignado exitosamente con UserID=0x%08x, AccountID=0x%016llx en %s",
+                                user_id, static_cast<unsigned long long>(active_account_id), sfo_path.c_str());
                 }
             }
         }

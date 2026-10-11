@@ -16,6 +16,7 @@
 #include "core/sfo_resigner.hpp"
 #include "core/keystone_manager.hpp"
 #include "core/samu_vault.hpp"
+#include "core/account_manager.hpp"
 
 #include <chrono>
 #include <thread>
@@ -532,6 +533,19 @@ TEST(MacheteNetworkTest, DnsResolverClearCache)
     resolver.clear_cache();
     // Cache limpia sin excepciones
     SUCCEED();
+}
+
+TEST(MacheteAccountTest, DetectActiveAccountIdFallback)
+{
+    std::uint64_t acc = machete::account::detect_active_account_id(0x105f615a);
+    EXPECT_NE(acc, 0ULL);
+}
+
+TEST(MacheteKeystoneTest, LookupSearchCandidates)
+{
+    // Verificar que find_authentic_game_keystone maneja IDs inexistentes sin crashear
+    std::string path = machete::keystone::find_authentic_game_keystone("NONEXISTENT");
+    EXPECT_TRUE(path.empty());
 }
 
 } // namespace hui::testing
