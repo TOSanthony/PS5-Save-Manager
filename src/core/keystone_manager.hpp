@@ -1,0 +1,87 @@
+// MacheteSVG - Keystone Verification & Authentic Injection
+// Copyright (C) 2026 MacheteSVG Team
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+#pragma once
+
+#include "core/logger.hpp"
+
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <vector>
+
+namespace machete::keystone
+{
+
+constexpr std::size_t KEYSTONE_SIZE = 96; // 0x60 bytes
+
+// Busca el keystone autentico de la aplicacion instalada en la consola
+inline std::string find_authentic_game_keystone(const std::string &title_id)
+{
+    const std::vector<std::string> candidates = {
+        "/user/appmeta/" + title_id + "/sce_sys/keystone",
+        "/user/appmeta/" + title_id + "/keystone",
+        "/mnt/ext0/user/appmeta/" + title_id + "/sce_sys/keystone",
+        "/mnt/ext1/user/appmeta/" + title_id + "/sce_sys/keystone",
+        "/data/apollo/" + title_id + ".keystone",
+        "/data/MacheteSVG/keystones/" + title_id + ".keystone"};
+
+    for (const auto &p : candidates)
+    {
+        if (access(p.c_str(), R_OK) == 0)
+            return p;
+    }
+    return "";
+}
+
+// Inyecta el keystone autentico en el directorio de guardado restaurado
+inline bool inject_authentic_keystone(const std::string &save_dir, const std::string &title_id)
+{
+    const std::string authentic_src = find_authentic_game_keystone(title_id);
+    if (authentic_src.empty())
+    {
+        MACHETE_LOG("[KEYSTONE]", "Aviso: No se localizo keystone autentico en appmeta para %s", title_id.c_str());
+        return false;
+    }
+
+    // Ubicaciones de keystone en la partida (directa o bajo sce_sys)
+    std::string dest_keystone = save_dir + "/keystone";
+    if (access((save_dir + "/sce_sys").c_str(), F_OK) == 0)
+    {
+        dest_keystone = save_dir + "/sce_sys/keystone";
+    }
+
+    std::FILE *fin = std::fopen(authentic_src.c_str(), "rb");
+    if (!fin)
+        return false;
+
+    std::uint8_t buffer[KEYSTONE_SIZE];
+    const std::size_t n = std::fread(buffer, 1, KEYSTONE_SIZE, fin);
+    std::fclose(fin);
+
+    if (n != KEYSTONE_SIZE)
+        return false;
+
+    std::FILE *fout = std::fopen(dest_keystone.c_str(), "wb");
+    if (!fout)
+        return false;
+
+    std::fwrite(buffer, 1, KEYSTONE_SIZE, fout);
+    std::fflush(fout);
+    int fd = fileno(fout);
+    if (fd >= 0)
+    {
+        fsync(fd);
+    }
+    std::fclose(fout);
+    (void)chmod(dest_keystone.c_str(), 0666);
+
+    MACHETE_LOG("[KEYSTONE]", "Keystone autentico inyectado con exito en %s (desde %s)",
+                dest_keystone.c_str(), authentic_src.c_str());
+    return true;
+}
+
+} // namespace machete::keystone

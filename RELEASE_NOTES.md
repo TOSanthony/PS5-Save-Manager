@@ -40,15 +40,16 @@ Built with a hardware-accelerated OpenGL 4.6 SDF renderer, MacheteSVG delivers a
 
 ### Key Capabilities
 
-#### 1. Zero-Corruption Save Architecture
-- **Atomic Keystone and SealedKey Synchronization:** Restores matching `keystone`, `sealedkey`, `param.sfo`, and payload containers atomically from backups. Prevents cryptographic PFS key derivation mismatches and eliminates the "Save data is corrupted" error on PS4 games in backward compatibility.
+#### 1. Zero-Corruption Save Architecture & Error CE-107109-8 Resolution
+- **PS5 Dual-Folder Synchronization:** Backs up and restores both `/user/home/<id>/savedata_prospero/<TitleID>` (raw encrypted `sdimg_*` images) and `/user/home/<id>/savedata_prospero_meta/<TitleID>` (save database index, parameters, icons). Resolves error `CE-107109-8` by ensuring the Prospero savedata daemon indexes restored saves without conflicts.
+- **Apollo Save Tool Integration & PS4 Re-signing:** Automatically extracts and injects authentic `keystone` files from `/user/appmeta/<TitleID>/sce_sys/keystone`. Patches `param.sfo` (`ACCOUNT_ID`, `PARAMS.user_id`, and Sony `psid_hmac` recalculation with `PSID_HMAC_KEY`) so foreign or pre-reinstall PS4 saves (`CUSAxxxxx`) load seamlessly on the active user account (`0x105f615a`).
 - **User Ownership & Open Permissions:** Dynamically detects user account ownership (`/user/home/<user_id>`) and applies matching UID/GID alongside open file permissions (`0666` files, `0777` directories) with kernel sync flush, ensuring unprivileged game processes load restored saves immediately without permission errors.
-- **Error CE-108255-1 Elimination:** Employs orderly `sceSaveDataUmount` operations, allowing the Prospero kernel to seal PFS containers cleanly.
-- **Dummy Save Safeguard:** Prompts users to run newly installed games once before restoring saves to generate genuine local hardware keys.
+- **SAMU Hardware Cryptographic Vault:** Archives console-unique 96-byte SAMU sealed blobs, plaintext 32-byte AES PFS keys via `/dev/pfsmgr` ioctl `0xc0845302` (`PFS_DECRYPT_KEK`), OpenPSID, and SHA-256 integrity signatures in `crypto_vault.bin` alongside each backup for digital preservation and future cross-console decryption.
 
-#### 2. Google Drive Cloud Synchronization
+#### 2. Google Drive Cloud Synchronization & Autonomous DNS Bypass
+- **Autonomous RFC 1035 UDP DNS Resolver:** Queries upstream public DNS servers (`8.8.8.8`, `1.1.1.1`) directly over WAN UDP port 53, completely bypassing local loopback filtering payloads such as `NanoDNS` (`0x8041013D`) without requiring network reconfiguration or payload toggling.
+- **Direct TLS Client with SNI:** Native BSD socket connection paired with `libSceSsl` transmits authentic SNI and HTTP headers directly to resolved Google IPs.
 - **OAuth 2.0 Device Flow (RFC 8628):** Link your Google account securely without entering credentials on the console. Simply navigate to `https://www.google.com/device` and enter the code shown on screen.
-- **Native libSceHttp2 Networking:** Employs native Sony HTTP/2 client routines without unsupported FreeBSD `getaddrinfo` libc calls, eliminating system panics and providing clean diagnostics for DNS/ESP32 blocker environments (`0x8041013D`).
 - **Asynchronous Execution:** Upload and download operations run inside dedicated worker threads, ensuring the UI remains responsive at 60 FPS.
 - **Storage Standard:** Backups are structured in cloud root directory `/MacheteSVG/[TitleID - Game Name]/`.
 
@@ -81,7 +82,8 @@ Built with a hardware-accelerated OpenGL 4.6 SDF renderer, MacheteSVG delivers a
 
 | File | Size | SHA-256 Checksum |
 | :--- | :--- | :--- |
-| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,943,870 bytes) | `7a00fce0802084fdfb68b4b9d9ae748698bc841d2650d53d95c3db81ce460884` |
+| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,962,554 bytes) | `43facc7a3b73c37dfe805d4500f1a277dc32afbe63fb1b25977df7125cdb9468` |
+| `eboot.bin` | 23.7 MB (24,868,255 bytes) | `36ac76b44342ff0179b84211382ce29500c1237335bb2f90dbeabe4a8eee2913` |
 
 All package files are validated with open-mode permissions (`0777`) for out-of-the-box execution on jailbroken PlayStation 5 systems.
 
@@ -132,15 +134,16 @@ Desarrollado con renderizado acelerado por hardware OpenGL 4.6 SDF, MacheteSVG o
 
 ### Capacidades Principales
 
-#### 1. Arquitectura de Guardado con Cero Corrupción
-- **Sincronización Atómica de Keystone y SealedKey:** Restaura de forma atómica el conjunto completo de archivos (`keystone`, `sealedkey`, `param.sfo` y contenedores de datos). Evita fallos de derivación de claves PFS entre consolas o partidas previas, eliminando el error de datos corruptos en juegos de PS4 en retrocompatibilidad.
+#### 1. Arquitectura de Guardado con Cero Corrupción y Resolución del Error CE-107109-8
+- **Sincronización Dual de Carpetas en PS5:** Respalda y restaura simultáneamente `/user/home/<id>/savedata_prospero/<TitleID>` (imágenes planas cifradas `sdimg_*`) y `/user/home/<id>/savedata_prospero_meta/<TitleID>` (base de datos indexada, parámetros e iconos). Elimina la causa raíz del error `CE-107109-8` al permitir que el demonio de guardado de Prospero reconozca e indexe de inmediato las partidas restauradas.
+- **Integración del Motor de Apollo Save Tool y Resignado de PS4:** Extrae e inyecta automáticamente el archivo `keystone` auténtico desde `/user/appmeta/<TitleID>/sce_sys/keystone`. Modifica y refirma `param.sfo` (`ACCOUNT_ID`, `PARAMS.user_id` y recálculo del `psid_hmac` de Sony mediante la clave maestra `PSID_HMAC_KEY`) para que partidas de PS4 procedentes de otras consolas o instalaciones previas funcionen de inmediato en la cuenta actual (`0x105f615a`).
 - **Propiedad de Usuario y Permisos Abiertos:** Detecta dinámicamente la propiedad de la cuenta del usuario (`/user/home/<user_id>`) y asigna los UID/GID correspondientes junto con permisos abiertos (`0666` en archivos, `0777` en directorios) y sincronización con el kernel, garantizando que el juego lea la partida inmediatamente sin conflictos de permisos.
-- **Eliminación del Error CE-108255-1:** Realiza un desmontaje ordenado mediante `sceSaveDataUmount`, permitiendo que el kernel de Prospero selle los contenedores PFS de forma limpia.
-- **Protección de Partida Base:** Avisa al usuario para iniciar una vez cualquier juego nuevo y generar las claves criptográficas locales legítimas.
+- **Bóveda Criptográfica de Hardware SAMU:** Archiva el blob sellado por SAMU de 96 bytes, la clave AES PFS en texto plano de 32 bytes desellada en vivo mediante `/dev/pfsmgr` (ioctl `0xc0845302`), el OpenPSID y hashes de integridad SHA-256 en `crypto_vault.bin` junto a cada copia de seguridad para preservación digital y futuro descifrado entre consolas.
 
-#### 2. Sincronización en la Nube con Google Drive
+#### 2. Sincronización en la Nube con Google Drive y Evasión Autónoma de DNS
+- **Resolvedor DNS Autónomo RFC 1035 UDP:** Realiza consultas directas por sockets UDP WAN al puerto 53 de servidores públicos (`8.8.8.8`, `1.1.1.1`), evitando de forma completamente autónoma bloqueadores locales como `NanoDNS` (`0x8041013D`) sin necesidad de alterar configuraciones de red ni desactivar payloads.
+- **Cliente TLS Directo con SNI:** Conexión por socket BSD nativo combinada con `libSceSsl` que transmite SNI y cabeceras HTTP legítimas directamente a las IPs resueltas de Google.
 - **OAuth 2.0 Device Flow (RFC 8628):** Vincula tu cuenta de Google de forma segura sin ingresar contraseñas en la consola. Ingresa a `https://www.google.com/device` e introduce el código que se muestra en pantalla.
-- **Conectividad Nativa mediante libSceHttp2:** Utiliza el cliente HTTP/2 nativo de Sony sin llamadas incompatibles a `getaddrinfo` de libc FreeBSD, eliminando cuelgues del sistema y ofreciendo diagnósticos claros en entornos con bloqueo DNS/ESP32 (`0x8041013D`).
 - **Ejecución Asíncrona:** Las transferencias se ejecutan en hilos dedicados para que la interfaz se mantenga a 60 FPS sin bloqueos.
 - **Estructura Estándar:** Las copias de seguridad se organizan en la carpeta `/MacheteSVG/[TitleID - Nombre del Juego]/`.
 
@@ -173,7 +176,8 @@ Desarrollado con renderizado acelerado por hardware OpenGL 4.6 SDF, MacheteSVG o
 
 | Archivo | Tamaño | Suma de Verificación SHA-256 |
 | :--- | :--- | :--- |
-| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,943,870 bytes) | `7a00fce0802084fdfb68b4b9d9ae748698bc841d2650d53d95c3db81ce460884` |
+| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,962,554 bytes) | `43facc7a3b73c37dfe805d4500f1a277dc32afbe63fb1b25977df7125cdb9468` |
+| `eboot.bin` | 23.7 MB (24,868,255 bytes) | `36ac76b44342ff0179b84211382ce29500c1237335bb2f90dbeabe4a8eee2913` |
 
 Todos los archivos han sido generados y verificados con permisos de modo abierto (`0777`) para ejecución inmediata en consolas PlayStation 5.
 

@@ -5,10 +5,14 @@
 #include "core/save_manager.hpp"
 #include "core/i18n.hpp"
 #include "core/jailbreak.hpp"
+#include "core/keystone_manager.hpp"
 #include "core/logger.hpp"
+#include "core/samu_vault.hpp"
+#include "core/sfo_resigner.hpp"
 #include "cloud/google_drive.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -21,15 +25,26 @@ namespace machete::save
 namespace
 {
 
+std::uint32_t extract_user_id_from_path(const std::string &path)
+{
+    std::size_t pos = path.find("/user/home/");
+    if (pos != std::string::npos)
+    {
+        std::size_t start = pos + 11;
+        std::size_t end = path.find('/', start);
+        std::string hex_str = (end == std::string::npos) ? path.substr(start) : path.substr(start, end - start);
+        if (!hex_str.empty())
+        {
+            return static_cast<std::uint32_t>(std::strtoul(hex_str.c_str(), nullptr, 16));
+        }
+    }
+    return 0x10000000;
+}
+
 bool ensure_directories_recursive(const std::string &path, uid_t owner_uid = 0, gid_t owner_gid = 0)
 {
     if (path.empty())
         return false;
-
-    // Si ya existe fisicamente como directorio, no hacer nada para no alterar permisos de rutas del sistema
-    struct stat st{};
-    if (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
-        return true;
 
     std::string current;
     for (std::size_t i = 0; i < path.size(); ++i)
@@ -40,17 +55,30 @@ bool ensure_directories_recursive(const std::string &path, uid_t owner_uid = 0, 
             if (current.empty() || current == "/")
                 continue;
 
-            // Si el componente ya existe fisicamente (como /user, /user/home, /data), omitir
-            if (stat(current.c_str(), &st) == 0)
-                continue;
-
-            // Solo crear directorios que realmente no existian
-            if (mkdir(current.c_str(), 0777) == 0)
+            struct stat st{};
+            if (stat(current.c_str(), &st) != 0)
             {
-                (void)chmod(current.c_str(), 0777);
-                if (owner_uid != 0 || owner_gid != 0)
+                if (mkdir(current.c_str(), 0777) == 0)
                 {
-                    (void)chown(current.c_str(), owner_uid, owner_gid);
+                    (void)chmod(current.c_str(), 0777);
+                    if (owner_uid != 0 || owner_gid != 0)
+                    {
+                        (void)chown(current.c_str(), owner_uid, owner_gid);
+                    }
+                }
+            }
+            else
+            {
+                // CRUCIAL: Asegurar permisos 0777 en rutas de usuario y datos para que los juegos puedan escribir
+                if (current.find("/savedata") != std::string::npos ||
+                    current.find("/MacheteSVG") != std::string::npos ||
+                    current.find("/user/home") != std::string::npos)
+                {
+                    (void)chmod(current.c_str(), 0777);
+                    if (owner_uid != 0 || owner_gid != 0)
+                    {
+                        (void)chown(current.c_str(), owner_uid, owner_gid);
+                    }
                 }
             }
         }
@@ -250,6 +278,11 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
         if (std::strcmp(entry->d_name, ".") == 0 || std::strcmp(entry->d_name, "..") == 0)
             continue;
 
+        // No transferir directamente metadatos especiales en el flujo generico de partidas
+        if (std::strcmp(entry->d_name, ".meta") == 0 ||
+            std::strcmp(entry->d_name, "crypto_vault.bin") == 0)
+            continue;
+
         const std::string src_path = src_dir + "/" + entry->d_name;
         const std::string dst_path = dst_dir + "/" + entry->d_name;
 
@@ -278,6 +311,117 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
 
     closedir(dir);
     return all_ok;
+}
+
+void apply_permissions_recursive(const std::string &path, uid_t uid = 0, gid_t gid = 0)
+{
+    struct stat st{};
+    if (stat(path.c_str(), &st) != 0)
+        return;
+
+    if (S_ISDIR(st.st_mode))
+    {
+        (void)chmod(path.c_str(), 0777);
+        if (uid != 0 || gid != 0)
+            (void)chown(path.c_str(), uid, gid);
+
+        DIR *dir = opendir(path.c_str());
+        if (dir)
+        {
+            while (const dirent *ent = readdir(dir))
+            {
+                if (std::strcmp(ent->d_name, ".") == 0 || std::strcmp(ent->d_name, "..") == 0)
+                    continue;
+                std::string child = path + "/" + ent->d_name;
+                apply_permissions_recursive(child, uid, gid);
+            }
+            closedir(dir);
+        }
+    }
+    else if (S_ISREG(st.st_mode))
+    {
+        (void)chmod(path.c_str(), 0666);
+        if (uid != 0 || gid != 0)
+            (void)chown(path.c_str(), uid, gid);
+    }
+}
+
+void post_process_restored_save(const scanner::ScannedGame &game,
+                                const std::string &dst_target,
+                                const std::string &backup_folder,
+                                uid_t target_uid, gid_t target_gid)
+{
+    const bool is_ps5 = (game.platform == "PS5" || game.title_id.rfind("PPSA", 0) == 0);
+
+    if (is_ps5)
+    {
+        // 1. Resolver ruta de metadatos de PS5: /user/home/<user_id>/savedata_prospero_meta/<TitleID>
+        std::string meta_target = dst_target;
+        std::size_t p = meta_target.find("/savedata_prospero/");
+        if (p != std::string::npos)
+        {
+            meta_target.replace(p, 19, "/savedata_prospero_meta/");
+        }
+        else
+        {
+            std::uint32_t uid_val = extract_user_id_from_path(dst_target);
+            char uid_hex[32];
+            std::snprintf(uid_hex, sizeof(uid_hex), "%x", uid_val);
+            meta_target = std::string("/user/home/") + uid_hex + "/savedata_prospero_meta/" + game.title_id;
+        }
+
+        std::string backup_meta = backup_folder + "/.meta";
+        if (access(backup_meta.c_str(), F_OK) != 0)
+        {
+            backup_meta = backup_folder + "/meta";
+        }
+
+        if (access(backup_meta.c_str(), F_OK) == 0)
+        {
+            int m_files = 0;
+            std::uint64_t m_bytes = 0;
+            ensure_directories_recursive(meta_target, target_uid, target_gid);
+            (void)copy_directory_recursive(backup_meta, meta_target, m_files, m_bytes, 0, nullptr, target_uid, target_gid);
+            MACHETE_LOG("[RESTORE]", "Metadatos restaurados para PS5: %d archivos en %s", m_files, meta_target.c_str());
+        }
+        else
+        {
+            ensure_directories_recursive(meta_target, target_uid, target_gid);
+            MACHETE_LOG("[RESTORE]", "Carpeta de metadatos asegurada en %s (sin .meta en respaldo previo)", meta_target.c_str());
+        }
+
+        apply_permissions_recursive(meta_target, target_uid, target_gid);
+    }
+    else
+    {
+        // 2. Partidas PS4: Inyeccion de Keystone autentico y Resignado SFO para la cuenta activa
+        MACHETE_LOG("[RESTORE]", "Procesando partida PS4 para cuenta actual: Keystone & param.sfo...");
+        (void)machete::keystone::inject_authentic_keystone(dst_target, game.title_id);
+
+        std::uint32_t user_id = extract_user_id_from_path(dst_target);
+        machete::sfo::ResignParams rp;
+        rp.target_user_id = user_id;
+        rp.target_account_id = static_cast<std::uint64_t>(user_id);
+
+        for (const std::string &sfo_path : {
+                 dst_target + "/param.sfo",
+                 dst_target + "/sce_sys/param.sfo",
+                 dst_target + "/sce_sys/PARAM.SFO"})
+        {
+            if (access(sfo_path.c_str(), F_OK) == 0)
+            {
+                if (machete::sfo::resign_param_sfo(sfo_path, rp))
+                {
+                    MACHETE_LOG("[RESTORE]", "param.sfo resignado exitosamente con UserID=0x%08x en %s",
+                                user_id, sfo_path.c_str());
+                }
+            }
+        }
+    }
+
+    // 3. Garantizar permisos 0777 (directorios) y 0666 (archivos) en todo el arbol restaurado
+    apply_permissions_recursive(dst_target, target_uid, target_gid);
+    ::sync();
 }
 
 std::string resolve_default_save_path(const scanner::ScannedGame &game)
@@ -382,6 +526,33 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
                 game.save_path.c_str(), dest_game_folder.c_str());
     const bool ok = copy_directory_recursive(game.save_path, dest_game_folder, files_count,
                                              bytes_copied, total_bytes, progress_cb);
+
+    const bool is_ps5 = (game.platform == "PS5" || game.title_id.rfind("PPSA", 0) == 0);
+    if (is_ps5)
+    {
+        std::string meta_path = game.save_path;
+        std::size_t pos = meta_path.find("/savedata_prospero/");
+        if (pos != std::string::npos)
+        {
+            meta_path.replace(pos, 19, "/savedata_prospero_meta/");
+            if (access(meta_path.c_str(), F_OK) == 0)
+            {
+                int meta_files = 0;
+                std::uint64_t meta_bytes = 0;
+                std::string dest_meta = dest_game_folder + "/.meta";
+                ensure_directories_recursive(dest_meta);
+                copy_directory_recursive(meta_path, dest_meta, meta_files, meta_bytes, 0, nullptr);
+                files_count += meta_files;
+                bytes_copied += meta_bytes;
+                MACHETE_LOG("[BACKUP]", "Metadatos respaldados para PS5: %d archivos en %s",
+                            meta_files, dest_meta.c_str());
+            }
+        }
+    }
+
+    std::uint32_t active_user_id = extract_user_id_from_path(game.save_path);
+    (void)machete::vault::archive_crypto_vault(dest_game_folder, game.title_id, game.platform,
+                                               game.save_path, active_user_id);
     ::sync();
 
     if (progress_cb)
@@ -521,6 +692,7 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
     const bool ok = copy_directory_recursive(backup_game_folder, dst_target, files_count,
                                              bytes_copied, total_dir_bytes, progress_cb,
                                              target_uid, target_gid);
+    post_process_restored_save(game, dst_target, backup_game_folder, target_uid, target_gid);
     ::sync();
 
     if (progress_cb)
@@ -812,6 +984,7 @@ OperationResult restore_backup_item(const scanner::ScannedGame &game,
     const bool ok = copy_directory_recursive(backup.folder_path, dst_target, files_count,
                                              bytes_copied, total_bytes, progress_cb,
                                              target_uid, target_gid);
+    post_process_restored_save(game, dst_target, backup.folder_path, target_uid, target_gid);
     ::sync();
 
     if (progress_cb)

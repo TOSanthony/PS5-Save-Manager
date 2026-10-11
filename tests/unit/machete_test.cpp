@@ -10,6 +10,12 @@
 #include "core/i18n.hpp"
 #include "core/save_manager.hpp"
 #include "cloud/google_drive.hpp"
+#include "cloud/dns_resolver.hpp"
+#include "cloud/ssl_http_client.hpp"
+#include "core/sha256_hmac.hpp"
+#include "core/sfo_resigner.hpp"
+#include "core/keystone_manager.hpp"
+#include "core/samu_vault.hpp"
 
 #include <chrono>
 #include <thread>
@@ -451,6 +457,81 @@ TEST_F(MacheteTest, KeystoneAndSealedKeyAtomicRestore)
     rmdir(backup_game_dir.c_str());
     rmdir(backup_root.c_str());
     rmdir("/tmp/machete_test_backup_usb");
+}
+
+TEST(MacheteCryptoTest, Sha256StandardVector)
+{
+    // NIST standard vector: "abc"
+    const char *msg = "abc";
+    std::uint8_t digest[32];
+    machete::crypto::Sha256 sha;
+    sha.update(reinterpret_cast<const std::uint8_t *>(msg), 3);
+    sha.finish(digest);
+
+    char hex[65] = {0};
+    for (int i = 0; i < 32; ++i)
+    {
+        std::snprintf(hex + (i * 2), 3, "%02x", digest[i]);
+    }
+
+    EXPECT_STREQ(hex, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+}
+
+TEST(MacheteCryptoTest, HmacSha256Execution)
+{
+    const std::uint8_t key[] = "secret_key";
+    const std::uint8_t data[] = "machete_payload_data";
+    std::uint8_t out_mac[32] = {0};
+
+    machete::crypto::hmac_sha256(key, sizeof(key) - 1, data, sizeof(data) - 1, out_mac);
+
+    bool non_zero = false;
+    for (int i = 0; i < 32; ++i)
+    {
+        if (out_mac[i] != 0)
+            non_zero = true;
+    }
+    EXPECT_TRUE(non_zero);
+}
+
+TEST(MacheteVaultTest, ArchiveCreationAndIntegrity)
+{
+    const std::string test_dir = "/tmp/machete_vault_test";
+    mkdir(test_dir.c_str(), 0777);
+
+    // Crear carpeta simulada de partida
+    const std::string save_src = test_dir + "/mock_save";
+    mkdir(save_src.c_str(), 0777);
+
+    bool ok = machete::vault::archive_crypto_vault(test_dir, "PPSA99999", "PS5", save_src, 0x105f615a);
+    EXPECT_TRUE(ok);
+
+    const std::string bin_path = test_dir + "/crypto_vault.bin";
+    std::FILE *f = std::fopen(bin_path.c_str(), "rb");
+    ASSERT_NE(f, nullptr);
+
+    machete::vault::CryptoVaultRecord rec;
+    std::size_t n = std::fread(&rec, 1, sizeof(rec), f);
+    std::fclose(f);
+
+    EXPECT_EQ(n, sizeof(rec));
+    EXPECT_EQ(rec.magic, machete::vault::VAULT_MAGIC);
+    EXPECT_EQ(rec.version, machete::vault::VAULT_VERSION);
+    EXPECT_EQ(rec.local_user_id, 0x105f615a);
+    EXPECT_STREQ(rec.title_id, "PPSA99999");
+    EXPECT_STREQ(rec.platform, "PS5");
+
+    std::remove(bin_path.c_str());
+    rmdir(save_src.c_str());
+    rmdir(test_dir.c_str());
+}
+
+TEST(MacheteNetworkTest, DnsResolverClearCache)
+{
+    auto &resolver = machete::cloud::DnsResolver::instance();
+    resolver.clear_cache();
+    // Cache limpia sin excepciones
+    SUCCEED();
 }
 
 } // namespace hui::testing

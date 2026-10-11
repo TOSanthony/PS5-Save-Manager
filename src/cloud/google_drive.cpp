@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "cloud/google_drive.hpp"
+#include "cloud/dns_resolver.hpp"
+#include "cloud/ssl_http_client.hpp"
 #include "core/i18n.hpp"
 #include "core/jailbreak.hpp"
 #include "core/logger.hpp"
@@ -362,7 +364,36 @@ bool extract_archive_to_directory(const std::string &data, const std::string &de
     return false;
 }
 
-// Ejecución HTTP2 nativa en PS5 mediante libSceHttp2
+[[maybe_unused]] static bool parse_url_components(const std::string &url, std::string &out_host, std::string &out_path, int &out_port)
+{
+    out_port = 443;
+    std::string u = url;
+    if (u.rfind("https://", 0) == 0)
+    {
+        u = u.substr(8);
+        out_port = 443;
+    }
+    else if (u.rfind("http://", 0) == 0)
+    {
+        u = u.substr(7);
+        out_port = 80;
+    }
+
+    std::size_t slash = u.find('/');
+    if (slash == std::string::npos)
+    {
+        out_host = u;
+        out_path = "/";
+    }
+    else
+    {
+        out_host = u.substr(0, slash);
+        out_path = u.substr(slash);
+    }
+    return !out_host.empty();
+}
+
+// Ejecución HTTP2 nativa en PS5 mediante libSceHttp2 con fallback a resolvedor autónomo
 HttpResponse execute_http_request(const std::string &url, int method, const std::string &body_data,
                                   const std::vector<std::pair<std::string, std::string>> &headers)
 {
@@ -463,16 +494,48 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
             }
             else
             {
-                if (send_res == -2143223491 || static_cast<std::uint32_t>(send_res) == 0x8041013Du)
+                // Fallback automático a resolvedor DNS autónomo (RFC 1035 UDP a 8.8.8.8) + libSceSsl SNI
+                std::string host, path;
+                int port = 443;
+                bool autonomous_ok = false;
+                if (parse_url_components(url, host, path, port))
                 {
-                    resp.error = "Conexion rechazada (0x8041013D). Revisa Internet o DNS/ESP32.";
+                    MACHETE_LOG("[CLOUD]", "Bloqueo DNS detectado (%d). Resolviendo autonomamente para '%s'...",
+                                send_res, host.c_str());
+                    std::string ip = DnsResolver::instance().resolve(host);
+                    if (!ip.empty())
+                    {
+                        auto sresp = SslHttpClient::request(
+                            ip, host, port, method_str, path, body_data, headers, 12);
+                        if (sresp.status > 0)
+                        {
+                            resp.status = sresp.status;
+                            resp.body = sresp.body;
+                            resp.error.clear();
+                            autonomous_ok = true;
+                            MACHETE_LOG("[CLOUD]", "Transporte autonomo exitoso: status=%d, body=%zu bytes",
+                                        resp.status, resp.body.size());
+                        }
+                        else
+                        {
+                            MACHETE_LOG("[CLOUD]", "Fallo transporte autonomo: %s", sresp.error.c_str());
+                        }
+                    }
                 }
-                else
+
+                if (!autonomous_ok)
                 {
-                    resp.error = "Fallo sceHttp2SendRequest (" + std::to_string(send_res) + ")";
+                    if (send_res == -2143223491 || static_cast<std::uint32_t>(send_res) == 0x8041013Du)
+                    {
+                        resp.error = "Conexion rechazada (0x8041013D). Revisa Internet o DNS/ESP32.";
+                    }
+                    else
+                    {
+                        resp.error = "Fallo sceHttp2SendRequest (" + std::to_string(send_res) + ")";
+                    }
+                    MACHETE_LOG("[CLOUD]", "Fallo al enviar HTTP a %s: code=%d (%s)",
+                                url.c_str(), send_res, resp.error.c_str());
                 }
-                MACHETE_LOG("[CLOUD]", "Fallo al enviar HTTP a %s: code=%d (%s)",
-                            url.c_str(), send_res, resp.error.c_str());
                 ::machete::log::flush();
             }
             sceHttp2DeleteRequest(req);
