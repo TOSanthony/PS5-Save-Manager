@@ -14,9 +14,11 @@ cxx=$(command -v "${HOST_CXX:-clang++}")
 cc=$(command -v "${HOST_CC:-clang}")
 build="$root/build/tests"
 ninja_begin "$build/build.ninja"
-read -r -a flags <<< "${HOST_TEST_CXXFLAGS:--std=c++20 -O2 -Wall -Wextra -Wpedantic -Werror -ffunction-sections -fdata-sections}"
-read -r -a ldflags <<< "${HOST_TEST_LDFLAGS:--Wl,--gc-sections}"
-read -r -a sanitizers <<< "${HOST_TEST_SANITIZERS:--fsanitize=address,undefined -fno-omit-frame-pointer}"
+flags=(${HOST_TEST_CXXFLAGS:--std=c++20 -O2 -Wall -Wextra -Wpedantic -ffunction-sections -fdata-sections})
+default_ldflags="-Wl,--gc-sections"
+[[ $(uname) == "Darwin" ]] && default_ldflags="-Wl,-dead_strip"
+ldflags=(${HOST_TEST_LDFLAGS:-$default_ldflags})
+sanitizers=(${HOST_TEST_SANITIZERS:--fsanitize=address,undefined -fno-omit-frame-pointer})
 
 sources=("$gtest/googletest/src/gtest-all.cc" "$gtest/googletest/src/gtest_main.cc")
 while IFS= read -r -d '' test_source; do

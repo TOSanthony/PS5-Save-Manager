@@ -16,7 +16,19 @@ stamp="$directory/.source-sha256"
 url="https://github.com/google/googletest/archive/refs/tags/v$version.tar.gz"
 hash="65fab701d9829d38cb77c14acdc431d2108bfdbf8979e40eb8ae567edf10b27c"
 
-for command in wget sha256sum tar; do
+verify_sha256() {
+    local expected="$1"
+    local file="$2"
+    local actual
+    if command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "$file" | awk '{print $1}')
+    else
+        actual=$(sha256sum "$file" | awk '{print $1}')
+    fi
+    [[ "$actual" == "$expected" ]]
+}
+
+for command in wget tar; do
     command -v "$command" >/dev/null || {
         echo "missing required command: $command" >&2
         exit 2
@@ -24,15 +36,14 @@ for command in wget sha256sum tar; do
 done
 
 mkdir -p "$directory"
-if [[ -f $archive ]] &&
-    ! printf '%s  %s\n' "$hash" "$archive" | sha256sum --check --strict >/dev/null 2>&1; then
+if [[ -f $archive ]] && ! verify_sha256 "$hash" "$archive"; then
     rm -f -- "$archive"
 fi
 if [[ ! -f $archive ]]; then
     temporary="$archive.download"
     rm -f -- "$temporary"
     wget -q "$url" -O "$temporary"
-    printf '%s  %s\n' "$hash" "$temporary" | sha256sum --check --strict >/dev/null
+    verify_sha256 "$hash" "$temporary" || { echo "sha256 mismatch for $temporary" >&2; exit 2; }
     mv "$temporary" "$archive"
 fi
 

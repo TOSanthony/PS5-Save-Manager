@@ -4,6 +4,7 @@
 
 #include "core/save_manager.hpp"
 #include "core/i18n.hpp"
+#include "core/jailbreak.hpp"
 #include "core/logger.hpp"
 #include "cloud/google_drive.hpp"
 
@@ -19,6 +20,27 @@ namespace machete::save
 
 namespace
 {
+
+bool ensure_directories_recursive(const std::string &path)
+{
+    if (path.empty())
+        return false;
+
+    std::string current;
+    for (std::size_t i = 0; i < path.size(); ++i)
+    {
+        current += path[i];
+        if (path[i] == '/' || i == path.size() - 1)
+        {
+            if (!current.empty() && current != "/")
+            {
+                mkdir(current.c_str(), 0777);
+                (void)chmod(current.c_str(), 0777);
+            }
+        }
+    }
+    return true;
+}
 
 std::string sanitize_name(std::string name)
 {
@@ -97,13 +119,14 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
         }
     }
 
-    char buffer[64 * 1024];
+    std::vector<char> buffer(64 * 1024);
     std::size_t n = 0;
     bool ok = true;
+    std::uint64_t last_cb_bytes = bytes_copied;
 
-    while ((n = std::fread(buffer, 1, sizeof(buffer), in)) > 0)
+    while ((n = std::fread(buffer.data(), 1, buffer.size(), in)) > 0)
     {
-        if (std::fwrite(buffer, 1, n, out) != n)
+        if (std::fwrite(buffer.data(), 1, n, out) != n)
         {
             MACHETE_LOG("[COPY]", "Error escribiendo en destino %s (errno=%d: %s)",
                         dst.c_str(), errno, std::strerror(errno));
@@ -111,8 +134,10 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
             break;
         }
         bytes_copied += n;
-        if (progress_cb)
+        // Notificar progreso cada 256 KB o al finalizar para no saturar el mutex del hilo principal
+        if (progress_cb && (bytes_copied - last_cb_bytes >= 256 * 1024 || bytes_copied == total_bytes))
         {
+            last_cb_bytes = bytes_copied;
             OperationProgress p;
             p.bytes_transferred = bytes_copied;
             p.total_bytes = total_bytes;
@@ -145,8 +170,7 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
     struct stat src_st{};
     if (stat(src_dir.c_str(), &src_st) == 0 && S_ISREG(src_st.st_mode))
     {
-        mkdir(dst_dir.c_str(), 0777);
-        (void)chmod(dst_dir.c_str(), 0777);
+        ensure_directories_recursive(dst_dir);
         std::size_t slash = src_dir.find_last_of('/');
         std::string filename = (slash != std::string::npos) ? src_dir.substr(slash + 1) : src_dir;
         std::string dst_file = dst_dir + "/" + filename;
@@ -170,8 +194,7 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
         return false;
     }
 
-    mkdir(dst_dir.c_str(), 0777);
-    (void)chmod(dst_dir.c_str(), 0777);
+    ensure_directories_recursive(dst_dir);
 
     DIR *dir = opendir(src_dir.c_str());
     if (!dir)
@@ -206,8 +229,7 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
         {
             if (S_ISDIR(st.st_mode))
             {
-                mkdir(dst_path.c_str(), 0777);
-                (void)chmod(dst_path.c_str(), 0777);
+                ensure_directories_recursive(dst_path);
                 if (!copy_directory_recursive(src_path, dst_path, files_count, bytes_copied, total_bytes, progress_cb, is_restoring))
                     all_ok = false;
             }
@@ -280,6 +302,22 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
         return res;
     }
 
+    if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
+    {
+        MACHETE_LOG("[BACKUP]", "Privilegios root ausentes (UID=%d, EUID=%d). Solicitando elevacion...",
+                    static_cast<int>(getuid()), static_cast<int>(geteuid()));
+        const auto jb = jailbreak::request_jailbreak();
+        if (!jb.root_access)
+        {
+            res.success = false;
+            res.message = is_es
+                ? "Fallo de privilegios: se requiere jailbreak (UID 0) para acceder a los datos de guardado"
+                : "Privilege failure: jailbreak (UID 0) required to access save data";
+            MACHETE_LOG("[BACKUP]", "Elevacion fallida. Operacion abortada de forma segura.");
+            return res;
+        }
+    }
+
     std::string root_dir = dest_device.root_dir;
     if (root_dir.empty())
     {
@@ -306,10 +344,8 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
     const std::string dest_game_folder =
         root_dir + "/" + game.title_id + " - " + sanitize_name(game.title);
 
-    mkdir(root_dir.c_str(), 0777);
-    (void)chmod(root_dir.c_str(), 0777);
-    mkdir(dest_game_folder.c_str(), 0777);
-    (void)chmod(dest_game_folder.c_str(), 0777);
+    ensure_directories_recursive(root_dir);
+    ensure_directories_recursive(dest_game_folder);
 
     std::uint64_t total_bytes = game.total_bytes;
     if (total_bytes == 0)
@@ -379,6 +415,22 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
     OperationResult res;
     const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
 
+    if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
+    {
+        MACHETE_LOG("[RESTORE]", "Privilegios root ausentes (UID=%d, EUID=%d). Solicitando elevacion...",
+                    static_cast<int>(getuid()), static_cast<int>(geteuid()));
+        const auto jb = jailbreak::request_jailbreak();
+        if (!jb.root_access)
+        {
+            res.success = false;
+            res.message = is_es
+                ? "Fallo de privilegios: se requiere jailbreak (UID 0) para restaurar en /user/home"
+                : "Privilege failure: jailbreak (UID 0) required to restore to /user/home";
+            MACHETE_LOG("[RESTORE]", "Elevacion fallida. Operacion abortada de forma segura.");
+            return res;
+        }
+    }
+
     if (source_device.type == storage::StorageType::Cloud)
     {
         auto &drive = cloud::GoogleDrive::instance();
@@ -444,8 +496,7 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
             dst_target = dst_target.substr(0, slash);
     }
 
-    mkdir(dst_target.c_str(), 0777);
-    (void)chmod(dst_target.c_str(), 0777);
+    ensure_directories_recursive(dst_target);
 
     int files_count = 0;
     std::uint64_t bytes_copied = 0;
@@ -681,6 +732,22 @@ OperationResult restore_backup_item(const scanner::ScannedGame &game,
     OperationResult res;
     const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
 
+    if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
+    {
+        MACHETE_LOG("[RESTORE]", "Privilegios root ausentes (UID=%d, EUID=%d). Solicitando elevacion...",
+                    static_cast<int>(getuid()), static_cast<int>(geteuid()));
+        const auto jb = jailbreak::request_jailbreak();
+        if (!jb.root_access)
+        {
+            res.success = false;
+            res.message = is_es
+                ? "Fallo de privilegios: se requiere jailbreak (UID 0) para restaurar en /user/home"
+                : "Privilege failure: jailbreak (UID 0) required to restore to /user/home";
+            MACHETE_LOG("[RESTORE]", "Elevacion fallida. Operacion abortada de forma segura.");
+            return res;
+        }
+    }
+
     if (access(backup.folder_path.c_str(), F_OK) != 0)
     {
         res.success = false;
@@ -725,8 +792,7 @@ OperationResult restore_backup_item(const scanner::ScannedGame &game,
             dst_target = dst_target.substr(0, slash);
     }
 
-    mkdir(dst_target.c_str(), 0777);
-    (void)chmod(dst_target.c_str(), 0777);
+    ensure_directories_recursive(dst_target);
 
     std::uint64_t total_bytes = backup.total_bytes;
     if (total_bytes == 0)

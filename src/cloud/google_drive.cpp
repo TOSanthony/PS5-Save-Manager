@@ -4,13 +4,17 @@
 
 #include "cloud/google_drive.hpp"
 #include "core/i18n.hpp"
+#include "core/jailbreak.hpp"
 #include "core/logger.hpp"
 #include "core/storage.hpp"
 
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <dirent.h>
+#include <sys/stat.h>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 #if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
@@ -35,6 +39,8 @@ extern "C"
     int sceHttp2SetConnectTimeOut(int req, std::uint32_t usec);
     int sceHttp2SetSendTimeOut(int req, std::uint32_t usec);
     int sceHttp2SetRecvTimeOut(int req, std::uint32_t usec);
+    int sceHttp2SetResolveTimeOut(int req, std::uint32_t usec);
+    int sceHttp2SetResolveRetry(int req, int retry);
     int sceHttp2SetAutoRedirect(int req, int enable);
     int sceHttp2SslDisableOption(int target, std::uint32_t options);
 }
@@ -147,6 +153,210 @@ std::string get_effective_client_id()
     return kDefaultGoogleClientId;
 }
 
+bool collect_files_recursive(const std::string &base_dir, const std::string &rel_sub,
+                             std::vector<std::string> &rel_paths)
+{
+    const std::string dir_path = rel_sub.empty() ? base_dir : (base_dir + "/" + rel_sub);
+    DIR *d = opendir(dir_path.c_str());
+    if (!d)
+        return false;
+
+    while (const dirent *ent = readdir(d))
+    {
+        if (std::strcmp(ent->d_name, ".") == 0 || std::strcmp(ent->d_name, "..") == 0)
+            continue;
+
+        const std::string entry_rel = rel_sub.empty() ? ent->d_name : (rel_sub + "/" + ent->d_name);
+        const std::string full_path = base_dir + "/" + entry_rel;
+
+        struct stat st{};
+        if (stat(full_path.c_str(), &st) == 0)
+        {
+            if (S_ISDIR(st.st_mode))
+            {
+                collect_files_recursive(base_dir, entry_rel, rel_paths);
+            }
+            else if (S_ISREG(st.st_mode))
+            {
+                rel_paths.push_back(entry_rel);
+            }
+        }
+    }
+    closedir(d);
+    return true;
+}
+
+std::string package_directory_or_file(const std::string &local_path)
+{
+    struct stat st{};
+    if (stat(local_path.c_str(), &st) != 0)
+        return "";
+
+    if (S_ISREG(st.st_mode))
+    {
+        std::FILE *f = std::fopen(local_path.c_str(), "rb");
+        if (!f)
+            return "";
+        std::string payload;
+        payload.resize(static_cast<std::size_t>(st.st_size));
+        const std::size_t read_bytes = std::fread(payload.data(), 1, payload.size(), f);
+        std::fclose(f);
+        payload.resize(read_bytes);
+        return payload;
+    }
+
+    if (!S_ISDIR(st.st_mode))
+        return "";
+
+    std::vector<std::string> rel_paths;
+    collect_files_recursive(local_path, "", rel_paths);
+
+    std::string archive;
+    archive.reserve(1024 * 1024);
+    archive.append("MCHTARCH", 8);
+
+    const std::uint32_t file_count = static_cast<std::uint32_t>(rel_paths.size());
+    archive.append(reinterpret_cast<const char *>(&file_count), sizeof(file_count));
+
+    for (const auto &rel : rel_paths)
+    {
+        const std::string full = local_path + "/" + rel;
+        std::FILE *f = std::fopen(full.c_str(), "rb");
+        if (!f)
+            continue;
+
+        std::fseek(f, 0, SEEK_END);
+        const long fsize = std::ftell(f);
+        std::fseek(f, 0, SEEK_SET);
+        if (fsize < 0)
+        {
+            std::fclose(f);
+            continue;
+        }
+
+        const std::uint16_t path_len = static_cast<std::uint16_t>(rel.size());
+        archive.append(reinterpret_cast<const char *>(&path_len), sizeof(path_len));
+        archive.append(rel.data(), rel.size());
+
+        const std::uint64_t file_sz = static_cast<std::uint64_t>(fsize);
+        archive.append(reinterpret_cast<const char *>(&file_sz), sizeof(file_sz));
+
+        const std::size_t cur_sz = archive.size();
+        archive.resize(cur_sz + static_cast<std::size_t>(fsize));
+        std::fread(&archive[cur_sz], 1, static_cast<std::size_t>(fsize), f);
+        std::fclose(f);
+    }
+
+    return archive;
+}
+
+bool extract_archive_to_directory(const std::string &data, const std::string &dest_dir)
+{
+    if (data.size() < 12)
+        return false;
+
+    // Asegurar directorio destino
+    std::string cur;
+    for (std::size_t c = 0; c < dest_dir.size(); ++c)
+    {
+        cur += dest_dir[c];
+        if (dest_dir[c] == '/' || c == dest_dir.size() - 1)
+        {
+            if (!cur.empty() && cur != "/")
+            {
+                mkdir(cur.c_str(), 0777);
+                (void)chmod(cur.c_str(), 0777);
+            }
+        }
+    }
+
+    if (std::memcmp(data.data(), "MCHTARCH", 8) == 0)
+    {
+        std::uint32_t file_count = 0;
+        std::memcpy(&file_count, data.data() + 8, sizeof(file_count));
+        std::size_t offset = 12;
+
+        for (std::uint32_t i = 0; i < file_count && offset < data.size(); ++i)
+        {
+            if (offset + sizeof(std::uint16_t) > data.size())
+                break;
+            std::uint16_t path_len = 0;
+            std::memcpy(&path_len, data.data() + offset, sizeof(path_len));
+            offset += sizeof(path_len);
+
+            if (offset + path_len + sizeof(std::uint64_t) > data.size())
+                break;
+            std::string rel_path(data.data() + offset, path_len);
+            offset += path_len;
+
+            std::uint64_t file_sz = 0;
+            std::memcpy(&file_sz, data.data() + offset, sizeof(file_sz));
+            offset += sizeof(file_sz);
+
+            if (offset + file_sz > data.size())
+                break;
+
+            const std::string target_file = dest_dir + "/" + rel_path;
+            const std::size_t slash = target_file.find_last_of('/');
+            if (slash != std::string::npos)
+            {
+                const std::string parent = target_file.substr(0, slash);
+                std::string p_cur;
+                for (std::size_t c = 0; c < parent.size(); ++c)
+                {
+                    p_cur += parent[c];
+                    if (parent[c] == '/' || c == parent.size() - 1)
+                    {
+                        if (!p_cur.empty() && p_cur != "/")
+                        {
+                            mkdir(p_cur.c_str(), 0777);
+                            (void)chmod(p_cur.c_str(), 0777);
+                        }
+                    }
+                }
+            }
+
+            // Preservar Keystone de la consola si existe
+            if ((rel_path == "keystone" || rel_path == "KEYSTONE") && access(target_file.c_str(), F_OK) == 0)
+            {
+                MACHETE_LOG("[CLOUD]", "Preservando keystone local: %s", target_file.c_str());
+                offset += static_cast<std::size_t>(file_sz);
+                continue;
+            }
+
+            std::FILE *out = std::fopen(target_file.c_str(), "wb");
+            if (out)
+            {
+                if (file_sz > 0)
+                    std::fwrite(data.data() + offset, 1, static_cast<std::size_t>(file_sz), out);
+                std::fflush(out);
+                fsync(fileno(out));
+                std::fclose(out);
+                (void)chmod(target_file.c_str(), 0666);
+            }
+            offset += static_cast<std::size_t>(file_sz);
+        }
+        sync();
+        return true;
+    }
+    else
+    {
+        const std::string target_file = dest_dir.find('.') != std::string::npos ? dest_dir : (dest_dir + "/savedata.bin");
+        std::FILE *out = std::fopen(target_file.c_str(), "wb");
+        if (out)
+        {
+            std::fwrite(data.data(), 1, data.size(), out);
+            std::fflush(out);
+            fsync(fileno(out));
+            std::fclose(out);
+            (void)chmod(target_file.c_str(), 0666);
+            sync();
+            return true;
+        }
+    }
+    return false;
+}
+
 // Ejecución HTTP2 nativa en PS5 mediante libSceHttp2
 HttpResponse execute_http_request(const std::string &url, int method, const std::string &body_data,
                                   const std::vector<std::pair<std::string, std::string>> &headers)
@@ -192,17 +402,19 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
         }
     }
 
-    int tmpl = sceHttp2CreateTemplate(s_http, "MacheteSVG-PS5/1.0.0", 3, 1);
+    int tmpl = sceHttp2CreateTemplate(s_http, "MacheteSVG-PS5/1.0.0", 2, 1);
     if (tmpl >= 0)
     {
-        // Deshabilitar verificaciones SSL estrictas si la consola no posee los certificados raiz de Google
-        (void)sceHttp2SslDisableOption(tmpl, 0x01 | 0x02 | 0x04);
+        // Deshabilitar verificaciones SSL estrictas si la consola no posee los certificados raiz de Google (0x1F)
+        (void)sceHttp2SslDisableOption(tmpl, 0x1F);
 
         const std::uint64_t req_body_len = (method == 1) ? body_data.size() : 0;
         int req = sceHttp2CreateRequestWithURL(tmpl, method_str, url.c_str(), req_body_len);
         if (req >= 0)
         {
-            (void)sceHttp2SslDisableOption(req, 0x01 | 0x02 | 0x04);
+            (void)sceHttp2SslDisableOption(req, 0x1F);
+            (void)sceHttp2SetResolveTimeOut(req, 6'000'000); // 6 segundos timeout DNS
+            (void)sceHttp2SetResolveRetry(req, 2);           // 2 reintentos de resolución
             (void)sceHttp2SetConnectTimeOut(req, 8'000'000); // 8 segundos
             (void)sceHttp2SetSendTimeOut(req, 10'000'000);   // 10 segundos
             (void)sceHttp2SetRecvTimeOut(req, 15'000'000);   // 15 segundos
@@ -233,16 +445,24 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
                     if (read_bytes <= 0)
                         break;
                     resp.body.append(buffer, static_cast<std::size_t>(read_bytes));
-                    if (resp.body.size() > 4 * 1024 * 1024)
-                        break; // Limite de 4MB por respuesta
+                    if (resp.body.size() > 256 * 1024 * 1024)
+                        break; // Limite amplio de 256MB para respaldos grandes
                 }
                 MACHETE_LOG("[CLOUD]", "HTTP %s respuesta: status=%d, body=%zu bytes",
                             url.c_str(), resp.status, resp.body.size());
             }
             else
             {
-                resp.error = "Fallo sceHttp2SendRequest (" + std::to_string(send_res) + ")";
-                MACHETE_LOG("[CLOUD]", "Fallo al enviar HTTP a %s: code=%d", url.c_str(), send_res);
+                if (send_res == -2143223491 || static_cast<std::uint32_t>(send_res) == 0x8041013Du)
+                {
+                    resp.error = "Conexion rechazada (0x8041013D). Revisa Internet o DNS/ESP32.";
+                }
+                else
+                {
+                    resp.error = "Fallo sceHttp2SendRequest (" + std::to_string(send_res) + ")";
+                }
+                MACHETE_LOG("[CLOUD]", "Fallo al enviar HTTP a %s: code=%d (%s)",
+                            url.c_str(), send_res, resp.error.c_str());
             }
             sceHttp2DeleteRequest(req);
         }
@@ -471,6 +691,12 @@ void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> 
             const std::string client_id = get_effective_client_id();
             MACHETE_LOG("[CLOUD]", "Iniciando Device Auth con client_id: %s", client_id.c_str());
 
+            if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
+            {
+                MACHETE_LOG("[CLOUD]", "Privilegios root ausentes al iniciar Google Drive. Solicitando elevacion...");
+                (void)jailbreak::request_jailbreak();
+            }
+
             // Petición inicial RFC 8628 Device Authorization a Google
             const std::string post_body =
                 "client_id=" + client_id +
@@ -655,19 +881,7 @@ void GoogleDrive::backup_save(const std::string &title_id, const std::string &ga
             std::string payload;
             if (!local_save_path.empty())
             {
-                std::FILE *f = std::fopen(local_save_path.c_str(), "rb");
-                if (f)
-                {
-                    std::fseek(f, 0, SEEK_END);
-                    const long sz = std::ftell(f);
-                    std::fseek(f, 0, SEEK_SET);
-                    if (sz > 0 && sz <= 10 * 1024 * 1024)
-                    {
-                        payload.resize(static_cast<std::size_t>(sz));
-                        std::fread(payload.data(), 1, payload.size(), f);
-                    }
-                    std::fclose(f);
-                }
+                payload = package_directory_or_file(local_save_path);
             }
             if (payload.empty())
                 payload = "MacheteSVG_Backup_" + title_id + " - " + game_name;
@@ -676,14 +890,25 @@ void GoogleDrive::backup_save(const std::string &title_id, const std::string &ga
             HttpResponse resp = execute_http_request(upload_url, 1, payload, headers);
 
             sync_progress_.store(1.0f);
-            sync_state_.store(SyncState::Complete);
+            const bool ok = (resp.status == 200 || resp.status == 201);
+            sync_state_.store(ok ? SyncState::Complete : SyncState::Failed);
 
-            std::string msg =
-                is_es ? ("Partida de " + game_name + " respaldada en Google Drive")
-                      : ("Save data for " + game_name + " backed up to Google Drive");
+            std::string msg;
+            if (ok)
+            {
+                msg = is_es ? ("Partida de " + game_name + " respaldada en Google Drive (" +
+                               std::to_string(payload.size() / 1024) + " KB)")
+                            : ("Save data for " + game_name + " backed up to Google Drive (" +
+                               std::to_string(payload.size() / 1024) + " KB)");
+            }
+            else
+            {
+                msg = is_es ? ("Fallo al respaldar en Google Drive: " + resp.error)
+                            : ("Failed to backup to Google Drive: " + resp.error);
+            }
 
             if (on_complete)
-                on_complete(true, msg);
+                on_complete(ok, msg);
 
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             sync_state_.store(SyncState::Idle);
@@ -739,12 +964,11 @@ void GoogleDrive::restore_save(
     const std::string &cloud_file_id, const std::string &dest_local_path,
     std::function<void(bool success, const std::string &msg)> on_complete)
 {
-    (void)dest_local_path;
     sync_state_.store(SyncState::Downloading);
     sync_progress_.store(0.2f);
 
     std::thread(
-        [this, cloud_file_id, on_complete]()
+        [this, cloud_file_id, dest_local_path, on_complete]()
         {
             const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
 
@@ -770,13 +994,33 @@ void GoogleDrive::restore_save(
             std::string get_url = "https://www.googleapis.com/drive/v3/files/" + cloud_file_id + "?alt=media";
             HttpResponse resp = execute_http_request(get_url, 0, "", headers);
 
+            bool write_ok = false;
+            if (resp.status == 200 && !resp.body.empty() && !dest_local_path.empty())
+            {
+                if (!jailbreak::verify_root_access(static_cast<int>(getpid())))
+                {
+                    (void)jailbreak::request_jailbreak();
+                }
+                write_ok = extract_archive_to_directory(resp.body, dest_local_path);
+            }
+
             sync_progress_.store(1.0f);
-            sync_state_.store(SyncState::Complete);
+            sync_state_.store(write_ok ? SyncState::Complete : SyncState::Failed);
 
             if (on_complete)
             {
-                on_complete(true, is_es ? "Partida descargada exitosamente desde Google Drive"
-                                        : "Save data successfully downloaded from Google Drive");
+                if (write_ok)
+                {
+                    on_complete(true, is_es ? "Partida restaurada exitosamente desde Google Drive"
+                                            : "Save data successfully restored from Google Drive");
+                }
+                else
+                {
+                    on_complete(false, is_es ? ("Fallo al restaurar partida desde Google Drive" +
+                                                (resp.error.empty() ? "" : ": " + resp.error))
+                                             : ("Failed to restore save from Google Drive" +
+                                                (resp.error.empty() ? "" : ": " + resp.error)));
+                }
             }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(500));

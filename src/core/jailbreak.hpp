@@ -34,6 +34,9 @@ struct JailbreakInfo
 // Bloquea brevemente (hasta 1.5s en sondeo de 50ms) esperando a que el daemon consuma el archivo.
 JailbreakInfo request_jailbreak();
 
+// Verifica el escape del sandbox y privilegios de lectura/escritura (UID 0)
+bool verify_root_access(int pid = 0) noexcept;
+
 // Comprueba el estado actual de privilegios y acceso a sistemas de archivos
 JailbreakInfo check_status();
 

@@ -65,42 +65,6 @@ bool write_all_fd(int fd, const void *data, std::size_t length) noexcept
     return true;
 }
 
-// Verifica el escape del sandbox y privilegios de lectura/escritura en /data y /user
-bool verify_root_access(int pid) noexcept
-{
-    // 1. Si el UID ya es 0 (root efectivo), privilegios concedidos
-    if (getuid() == 0 || geteuid() == 0)
-        return true;
-
-    // 2. Prueba de acceso a directorios de sistema de PlayStation 5 (/user/home)
-    DIR *dir_home = opendir("/user/home");
-    if (dir_home)
-    {
-        closedir(dir_home);
-        return true;
-    }
-
-    // 3. Prueba definitiva de lectura/escritura Y listado bajo /data (patrón ProsperoStore)
-    DIR *dir_data = opendir("/data");
-    if (dir_data)
-    {
-        closedir(dir_data);
-        char probe_path[96];
-        std::snprintf(probe_path, sizeof(probe_path), "/data/.machete_probe_%d", pid);
-        (void)unlink(probe_path);
-
-        const int fd = open(probe_path, O_RDWR | O_CREAT | O_EXCL, 0600);
-        if (fd >= 0)
-        {
-            close(fd);
-            (void)unlink(probe_path);
-            return true;
-        }
-    }
-
-    return false;
-}
-
 // Publica la petición de elevación atómicamente
 bool publish_atomic_request(const char *target_path, int pid) noexcept
 {
@@ -121,6 +85,26 @@ bool publish_atomic_request(const char *target_path, int pid) noexcept
 }
 
 } // namespace
+
+// Verifica el escape del sandbox y privilegios de lectura/escritura en /data y /user
+bool verify_root_access(int pid) noexcept
+{
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+    (void)pid;
+    // 1. En Prospero OS, el único indicador certero de privilegios root y sandbox levantado es UID 0
+    if (getuid() == 0 || geteuid() == 0)
+        return true;
+
+    // 2. Si el kernel asignó privilegios pero ruid aún no se ha reflejado, intentar setuid(0)
+    if (setuid(0) == 0 || seteuid(0) == 0)
+        return (getuid() == 0 || geteuid() == 0);
+
+    return false;
+#else
+    (void)pid;
+    return true;
+#endif
+}
 
 void clean_shadowmount_interference() noexcept
 {
@@ -228,9 +212,10 @@ bool auto_launch_embedded_daemon()
     if (!payload_data || payload_size == 0)
         return false;
 
-    // Conectar al cargador ELF local (probar puerto primario 9021 y alternativo 9020)
-    for (const std::uint16_t port : {static_cast<std::uint16_t>(9021), static_cast<std::uint16_t>(9020)})
+    // Conectar al cargador ELF local (probar puerto primario 9021, secundario 9020 y etaHEN 9027)
+    for (const std::uint16_t port : {static_cast<std::uint16_t>(9021), static_cast<std::uint16_t>(9020), static_cast<std::uint16_t>(9027)})
     {
+        MACHETE_LOG("[JAILBREAK]", "Intentando conexion con cargador ELF en 127.0.0.1:%u", port);
         const int socket = sceNetSocket("machete_elfldr", 2, 1, 6);
         if (socket < 0)
             continue;
@@ -254,6 +239,9 @@ bool auto_launch_embedded_daemon()
             continue;
         }
 
+        MACHETE_LOG("[JAILBREAK]", "Conectado al cargador ELF en puerto %u, transmitiendo binario (%zu bytes)...",
+                    port, payload_size);
+
         // Transmitir todo el binario ELF al cargador
         const auto *bytes = static_cast<const char *>(payload_data);
         std::size_t remaining = payload_size;
@@ -276,7 +264,11 @@ bool auto_launch_embedded_daemon()
         sceNetSocketClose(socket);
 
         if (stream_ok)
+        {
+            MACHETE_LOG("[JAILBREAK]", "Demonio ELF transmitido exitosamente (%zu bytes) al puerto %u",
+                        payload_size, port);
             return true;
+        }
     }
 
     return false;
