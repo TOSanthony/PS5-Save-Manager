@@ -4,6 +4,7 @@
 
 #include "core/save_manager.hpp"
 #include "core/i18n.hpp"
+#include "core/logger.hpp"
 #include "cloud/google_drive.hpp"
 
 #include <cstdio>
@@ -69,13 +70,31 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
 {
     std::FILE *in = std::fopen(src.c_str(), "rb");
     if (!in)
+    {
+        MACHETE_LOG("[COPY]", "Fallo al abrir archivo de origen: %s (errno=%d: %s)",
+                    src.c_str(), errno, std::strerror(errno));
         return false;
+    }
+
+    // Si el archivo de destino ya existe, asegurar permisos de escritura para evitar EACCES (archivos 0444)
+    if (access(dst.c_str(), F_OK) == 0)
+    {
+        (void)chmod(dst.c_str(), 0666);
+    }
 
     std::FILE *out = std::fopen(dst.c_str(), "wb");
     if (!out)
     {
-        std::fclose(in);
-        return false;
+        // En caso de bloqueo del sistema de archivos, forzar desenlace (unlink) y reintentar
+        (void)unlink(dst.c_str());
+        out = std::fopen(dst.c_str(), "wb");
+        if (!out)
+        {
+            MACHETE_LOG("[COPY]", "Fallo al abrir archivo de destino para escritura: %s (errno=%d: %s)",
+                        dst.c_str(), errno, std::strerror(errno));
+            std::fclose(in);
+            return false;
+        }
     }
 
     char buffer[64 * 1024];
@@ -86,6 +105,8 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
     {
         if (std::fwrite(buffer, 1, n, out) != n)
         {
+            MACHETE_LOG("[COPY]", "Error escribiendo en destino %s (errno=%d: %s)",
+                        dst.c_str(), errno, std::strerror(errno));
             ok = false;
             break;
         }
@@ -109,22 +130,38 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
     fsync(fileno(out)); // Forzar escritura física en disco
     std::fclose(out);
     std::fclose(in);
+
+    // Otorgar permisos abiertos al destino para que Prospero y los juegos puedan leerlo libremente
+    (void)chmod(dst.c_str(), 0666);
     return ok;
 }
 
 bool copy_directory_recursive(const std::string &src_dir, const std::string &dst_dir,
                               int &files_count, std::uint64_t &bytes_copied,
                               std::uint64_t total_bytes,
-                              const ProgressCallback &progress_cb)
+                              const ProgressCallback &progress_cb,
+                              bool is_restoring = false)
 {
     struct stat src_st{};
     if (stat(src_dir.c_str(), &src_st) == 0 && S_ISREG(src_st.st_mode))
     {
         mkdir(dst_dir.c_str(), 0777);
-        chmod(dst_dir.c_str(), 0777);
+        (void)chmod(dst_dir.c_str(), 0777);
         std::size_t slash = src_dir.find_last_of('/');
         std::string filename = (slash != std::string::npos) ? src_dir.substr(slash + 1) : src_dir;
         std::string dst_file = dst_dir + "/" + filename;
+
+        // Preservación estricta de Keystone: no sobreescribir el keystone local de la consola si existe
+        if (is_restoring && (filename == "keystone" || filename == "KEYSTONE"))
+        {
+            if (access(dst_file.c_str(), F_OK) == 0)
+            {
+                MACHETE_LOG("[RESTORE]", "Preservando keystone original de la consola: %s", dst_file.c_str());
+                files_count++;
+                return true;
+            }
+        }
+
         if (copy_file_with_fsync(src_dir, dst_file, bytes_copied, total_bytes, files_count, progress_cb))
         {
             files_count++;
@@ -134,11 +171,15 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
     }
 
     mkdir(dst_dir.c_str(), 0777);
-    chmod(dst_dir.c_str(), 0777);
+    (void)chmod(dst_dir.c_str(), 0777);
 
     DIR *dir = opendir(src_dir.c_str());
     if (!dir)
+    {
+        MACHETE_LOG("[COPY]", "No se pudo abrir directorio origen: %s (errno=%d: %s)",
+                    src_dir.c_str(), errno, std::strerror(errno));
         return false;
+    }
 
     bool all_ok = true;
     while (const dirent *entry = readdir(dir))
@@ -149,12 +190,25 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
         const std::string src_path = src_dir + "/" + entry->d_name;
         const std::string dst_path = dst_dir + "/" + entry->d_name;
 
-        struct stat st;
+        // Preservación de Keystone durante la restauración
+        if (is_restoring && (std::strcmp(entry->d_name, "keystone") == 0 || std::strcmp(entry->d_name, "KEYSTONE") == 0))
+        {
+            if (access(dst_path.c_str(), F_OK) == 0)
+            {
+                MACHETE_LOG("[RESTORE]", "Preservando keystone original de consola: %s", dst_path.c_str());
+                files_count++;
+                continue;
+            }
+        }
+
+        struct stat st{};
         if (stat(src_path.c_str(), &st) == 0)
         {
             if (S_ISDIR(st.st_mode))
             {
-                if (!copy_directory_recursive(src_path, dst_path, files_count, bytes_copied, total_bytes, progress_cb))
+                mkdir(dst_path.c_str(), 0777);
+                (void)chmod(dst_path.c_str(), 0777);
+                if (!copy_directory_recursive(src_path, dst_path, files_count, bytes_copied, total_bytes, progress_cb, is_restoring))
                     all_ok = false;
             }
             else
@@ -173,6 +227,38 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
 
     closedir(dir);
     return all_ok;
+}
+
+std::string resolve_default_save_path(const scanner::ScannedGame &game)
+{
+    DIR *home = opendir("/user/home");
+    if (!home)
+        return "";
+
+    std::string user_id;
+    while (const dirent *ent = readdir(home))
+    {
+        if (ent->d_name[0] == '.')
+            continue;
+        user_id = ent->d_name;
+        break; // Tomar el primer identificador de usuario activo
+    }
+    closedir(home);
+
+    if (user_id.empty())
+        return "";
+
+    const bool is_ps5 = (game.platform == "PS5" || game.title_id.rfind("PPSA", 0) == 0);
+    const std::string base_dir = std::string("/user/home/") + user_id + "/" +
+                                 (is_ps5 ? "savedata_prospero" : "savedata");
+
+    mkdir(base_dir.c_str(), 0777);
+    (void)chmod(base_dir.c_str(), 0777);
+
+    const std::string target = base_dir + "/" + game.title_id;
+    mkdir(target.c_str(), 0777);
+    (void)chmod(target.c_str(), 0777);
+    return target;
 }
 
 } // namespace
@@ -207,26 +293,12 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
 
     if (game.save_path.empty() || access(game.save_path.c_str(), F_OK) != 0)
     {
-        // Si no hay carpeta en /user/home/.../savedata, usar carpeta de demo o respaldo
-        if (progress_cb)
-        {
-            OperationProgress p;
-            p.files_transferred = 1;
-            p.bytes_transferred = 0;
-            p.total_bytes = 0;
-            p.progress = 1.0f;
-            p.current_file = sanitize_name(game.title);
-            progress_cb(p);
-        }
-        res.success = true;
-        const std::string target = root_dir + "/" + game.title_id + " - " +
-                                  sanitize_name(game.title);
-        mkdir(root_dir.c_str(), 0777);
-        chmod(root_dir.c_str(), 0777);
-        mkdir(target.c_str(), 0777);
-        chmod(target.c_str(), 0777);
-        res.message = is_es ? ("Estructura creada: " + target)
-                            : ("Directory structure created: " + target);
+        res.success = false;
+        res.message = is_es
+            ? ("No se encontraron datos de guardado en consola para " + game.title_id)
+            : ("No save data found on console for " + game.title_id);
+        MACHETE_LOG("[BACKUP]", "Fallo: save_path '%s' inaccesible para %s",
+                    game.save_path.c_str(), game.title_id.c_str());
         return res;
     }
 
@@ -235,9 +307,9 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
         root_dir + "/" + game.title_id + " - " + sanitize_name(game.title);
 
     mkdir(root_dir.c_str(), 0777);
-    chmod(root_dir.c_str(), 0777);
+    (void)chmod(root_dir.c_str(), 0777);
     mkdir(dest_game_folder.c_str(), 0777);
-    chmod(dest_game_folder.c_str(), 0777);
+    (void)chmod(dest_game_folder.c_str(), 0777);
 
     std::uint64_t total_bytes = game.total_bytes;
     if (total_bytes == 0)
@@ -245,8 +317,10 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
 
     int files_count = 0;
     std::uint64_t bytes_copied = 0;
+    MACHETE_LOG("[BACKUP]", "Iniciando respaldo de %s hacia %s",
+                game.save_path.c_str(), dest_game_folder.c_str());
     const bool ok = copy_directory_recursive(game.save_path, dest_game_folder, files_count,
-                                             bytes_copied, total_bytes, progress_cb);
+                                             bytes_copied, total_bytes, progress_cb, false);
 
     if (progress_cb)
     {
@@ -273,25 +347,26 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
         progress_cb(p);
     }
 
-    res.success = ok;
+    res.success = ok && (files_count > 0);
     res.files_transferred = files_count;
     res.bytes_transferred = bytes_copied;
 
-    if (ok)
+    if (res.success)
     {
         res.message = is_es
                           ? ("Respaldo completado (" + std::to_string(files_count) +
                              " archivos) en " + dest_game_folder)
                           : ("Backup completed (" + std::to_string(files_count) +
                              " files) at " + dest_game_folder);
+        MACHETE_LOG("[BACKUP]", "Respaldo exitoso: %d archivos, %llu bytes",
+                    files_count, static_cast<unsigned long long>(bytes_copied));
     }
     else
     {
         res.message = is_es
-                          ? ("Aviso: Copia parcial (" + std::to_string(files_count) +
-                             " archivos). Revisa permisos de unidad.")
-                          : ("Warning: Partial copy (" + std::to_string(files_count) +
-                             " files). Check storage permissions.");
+                          ? ("Aviso: Copia fallida o 0 archivos copiados. Revisa permisos de unidad.")
+                          : ("Warning: Copy failed or 0 files copied. Check storage permissions.");
+        MACHETE_LOG("[BACKUP]", "Fallo al respaldar %s hacia %s", game.title_id.c_str(), dest_game_folder.c_str());
     }
 
     return res;
@@ -330,38 +405,60 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
         res.success = false;
         res.message = is_es ? ("No se encontro respaldo previo en " + source_device.label)
                             : ("No previous backup found on " + source_device.label);
+        MACHETE_LOG("[RESTORE]", "No se encontro carpeta de respaldo: %s", backup_game_folder.c_str());
         return res;
     }
 
-    if (game.save_path.empty())
+    const std::uint64_t total_dir_bytes = calculate_directory_size(backup_game_folder);
+    if (total_dir_bytes == 0)
     {
         res.success = false;
-        res.message = is_es ? "Ruta de guardado del juego no localizada en la consola"
-                            : "Game save path not located on console";
+        res.message = is_es ? "La carpeta de respaldo esta vacia (0 bytes)"
+                            : "Backup folder is empty (0 bytes)";
+        MACHETE_LOG("[RESTORE]", "Error: respaldo vacio en %s", backup_game_folder.c_str());
         return res;
     }
 
     std::string dst_target = game.save_path;
-    struct stat save_st{};
-    if (stat(game.save_path.c_str(), &save_st) == 0 && S_ISREG(save_st.st_mode))
+    if (dst_target.empty())
     {
-        std::size_t slash = game.save_path.find_last_of('/');
-        if (slash != std::string::npos)
-            dst_target = game.save_path.substr(0, slash);
+        dst_target = resolve_default_save_path(game);
+        MACHETE_LOG("[RESTORE]", "Ruta resuelta dinamicamente para %s: %s",
+                    game.title_id.c_str(), dst_target.c_str());
     }
 
-    std::uint64_t total_bytes = calculate_directory_size(backup_game_folder);
+    if (dst_target.empty())
+    {
+        res.success = false;
+        res.message = is_es ? "Ruta de guardado del juego no localizada en la consola"
+                            : "Game save path not located on console";
+        MACHETE_LOG("[RESTORE]", "No se pudo determinar destino para %s", game.title_id.c_str());
+        return res;
+    }
+
+    struct stat save_st{};
+    if (stat(dst_target.c_str(), &save_st) == 0 && S_ISREG(save_st.st_mode))
+    {
+        std::size_t slash = dst_target.find_last_of('/');
+        if (slash != std::string::npos)
+            dst_target = dst_target.substr(0, slash);
+    }
+
+    mkdir(dst_target.c_str(), 0777);
+    (void)chmod(dst_target.c_str(), 0777);
 
     int files_count = 0;
     std::uint64_t bytes_copied = 0;
+    MACHETE_LOG("[RESTORE]", "Restaurando desde %s hacia %s",
+                backup_game_folder.c_str(), dst_target.c_str());
     const bool ok = copy_directory_recursive(backup_game_folder, dst_target, files_count,
-                                             bytes_copied, total_bytes, progress_cb);
+                                             bytes_copied, total_dir_bytes, progress_cb, true);
 
     if (progress_cb)
     {
         OperationProgress p;
         p.bytes_transferred = bytes_copied;
-        p.total_bytes = total_bytes > 0 ? total_bytes : bytes_copied;
+        p.total_bytes = total_dir_bytes > 0 ? total_dir_bytes : bytes_copied;
         p.files_transferred = files_count;
         p.progress = 0.99f;
         p.current_file = is_es ? "Sincronizando vnodes de disco..." : "Syncing vnode caches...";
@@ -375,29 +472,31 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
     {
         OperationProgress p;
         p.bytes_transferred = bytes_copied;
-        p.total_bytes = total_bytes > 0 ? total_bytes : bytes_copied;
+        p.total_bytes = total_dir_bytes > 0 ? total_dir_bytes : bytes_copied;
         p.files_transferred = files_count;
         p.progress = 1.0f;
         p.current_file = is_es ? "Completado" : "Completed";
         progress_cb(p);
     }
 
-    res.success = ok;
+    res.success = ok && (files_count > 0);
     res.files_transferred = files_count;
     res.bytes_transferred = bytes_copied;
 
-    if (ok)
+    if (res.success)
     {
         res.message = is_es
                           ? ("Restauracion exitosa (" + std::to_string(files_count) +
                              " archivos) con Keystone preservado")
                           : ("Restore successful (" + std::to_string(files_count) +
                              " files) with Keystone preserved");
+        MACHETE_LOG("[RESTORE]", "Restauracion completada exitosamente: %d archivos", files_count);
     }
     else
     {
-        res.message = is_es ? ("Fallo al restaurar archivos en " + game.save_path)
-                            : ("Failed to restore files at " + game.save_path);
+        res.message = is_es ? ("Fallo al restaurar archivos en " + dst_target)
+                            : ("Failed to restore files at " + dst_target);
+        MACHETE_LOG("[RESTORE]", "Error al restaurar archivos en %s", dst_target.c_str());
     }
 
     return res;
@@ -587,34 +686,58 @@ OperationResult restore_backup_item(const scanner::ScannedGame &game,
         res.success = false;
         res.message = is_es ? ("No se encontro la carpeta de respaldo: " + backup.folder_path)
                             : ("Backup folder not found: " + backup.folder_path);
+        MACHETE_LOG("[RESTORE]", "Carpeta de respaldo no accesible: %s", backup.folder_path.c_str());
         return res;
     }
 
-    if (game.save_path.empty())
+    const std::uint64_t total_dir_bytes = calculate_directory_size(backup.folder_path);
+    if (total_dir_bytes == 0)
     {
         res.success = false;
-        res.message = is_es ? "Ruta de guardado del juego no localizada en la consola"
-                            : "Game save path not located on console";
+        res.message = is_es ? "La carpeta de respaldo esta vacia (0 bytes)"
+                            : "Backup folder is empty (0 bytes)";
+        MACHETE_LOG("[RESTORE]", "Carpeta de respaldo vacia (0 bytes): %s", backup.folder_path.c_str());
         return res;
     }
 
     std::string dst_target = game.save_path;
-    struct stat save_st{};
-    if (stat(game.save_path.c_str(), &save_st) == 0 && S_ISREG(save_st.st_mode))
+    if (dst_target.empty())
     {
-        std::size_t slash = game.save_path.find_last_of('/');
-        if (slash != std::string::npos)
-            dst_target = game.save_path.substr(0, slash);
+        dst_target = resolve_default_save_path(game);
+        MACHETE_LOG("[RESTORE]", "Ruta resuelta dinamicamente para %s: %s",
+                    game.title_id.c_str(), dst_target.c_str());
     }
+
+    if (dst_target.empty())
+    {
+        res.success = false;
+        res.message = is_es ? "Ruta de guardado del juego no localizada en la consola"
+                            : "Game save path not located on console";
+        MACHETE_LOG("[RESTORE]", "No se localizo destino de guardado para %s", game.title_id.c_str());
+        return res;
+    }
+
+    struct stat save_st{};
+    if (stat(dst_target.c_str(), &save_st) == 0 && S_ISREG(save_st.st_mode))
+    {
+        std::size_t slash = dst_target.find_last_of('/');
+        if (slash != std::string::npos)
+            dst_target = dst_target.substr(0, slash);
+    }
+
+    mkdir(dst_target.c_str(), 0777);
+    (void)chmod(dst_target.c_str(), 0777);
 
     std::uint64_t total_bytes = backup.total_bytes;
     if (total_bytes == 0)
-        total_bytes = calculate_directory_size(backup.folder_path);
+        total_bytes = total_dir_bytes;
 
     int files_count = 0;
     std::uint64_t bytes_copied = 0;
+    MACHETE_LOG("[RESTORE]", "Iniciando copia recursiva desde %s hacia %s (total=%llu bytes)",
+                backup.folder_path.c_str(), dst_target.c_str(), static_cast<unsigned long long>(total_bytes));
     const bool ok = copy_directory_recursive(backup.folder_path, dst_target, files_count,
-                                             bytes_copied, total_bytes, progress_cb);
+                                             bytes_copied, total_bytes, progress_cb, true);
 
     if (progress_cb)
     {
@@ -641,22 +764,25 @@ OperationResult restore_backup_item(const scanner::ScannedGame &game,
         progress_cb(p);
     }
 
-    res.success = ok;
+    res.success = ok && (files_count > 0);
     res.files_transferred = files_count;
     res.bytes_transferred = bytes_copied;
 
-    if (ok)
+    if (res.success)
     {
         res.message = is_es
                           ? ("Restauracion exitosa (" + std::to_string(files_count) +
                              " archivos, " + backup.size_str + ") desde " + backup.device_label)
                           : ("Restore successful (" + std::to_string(files_count) +
                              " files, " + backup.size_str + ") from " + backup.device_label);
+        MACHETE_LOG("[RESTORE]", "Restauracion exitosa: %d archivos transferidos", files_count);
     }
     else
     {
-        res.message = is_es ? ("Fallo al restaurar archivos en " + game.save_path)
-                            : ("Failed to restore files at " + game.save_path);
+        res.message = is_es ? ("Fallo al restaurar archivos en " + dst_target)
+                            : ("Failed to restore files at " + dst_target);
+        MACHETE_LOG("[RESTORE]", "Fallo al restaurar archivos en %s (archivos copiados: %d)",
+                    dst_target.c_str(), files_count);
     }
 
     return res;

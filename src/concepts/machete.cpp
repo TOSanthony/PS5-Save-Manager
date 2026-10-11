@@ -809,9 +809,16 @@ class Machete final : public app::Concept
         {
             if (!authorized)
             {
-                // Botón Cerrar
-                drive_dialog_ = false;
-                feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
+                if (drive.auth_state() == machete::cloud::AuthState::Error)
+                {
+                    drive.start_device_auth([](const machete::cloud::DeviceCodeInfo &) {});
+                    feedback.play(audio::Cue::select, 1.0f, 0.0f);
+                }
+                else
+                {
+                    drive_dialog_ = false;
+                    feedback.play(audio::Cue::modal_close, 1.0f, 0.0f);
+                }
             }
             else
             {
@@ -1393,8 +1400,11 @@ class Machete final : public app::Concept
                 const Rect close_btn{570, 620, 780, 54};
                 ui::Look close_look;
                 close_look.focus = 1.0f;
-                paint.button(close_btn, machete::i18n::tr(machete::i18n::StringId::DriveClose),
-                             ui::ButtonKind::secondary, close_look);
+                const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
+                const char *btn_text = (drive.auth_state() == machete::cloud::AuthState::Error)
+                                           ? (is_es ? "Reintentar Conexión (X)" : "Retry Connection (X)")
+                                           : machete::i18n::tr(machete::i18n::StringId::DriveClose);
+                paint.button(close_btn, btn_text, ui::ButtonKind::secondary, close_look);
             }
             else
             {

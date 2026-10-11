@@ -4,6 +4,7 @@
 
 #include "cloud/google_drive.hpp"
 #include "core/i18n.hpp"
+#include "core/logger.hpp"
 #include "core/storage.hpp"
 
 #include <chrono>
@@ -15,7 +16,6 @@
 #if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
 extern "C"
 {
-    int sceSysmoduleLoadModule(std::uint32_t id);
     int sceNetInit(void);
     int sceNetTerm(void);
     int sceNetPoolCreate(const char *name, int size, int flags);
@@ -32,6 +32,11 @@ extern "C"
     int sceHttp2SendRequest(int req, const void *data, std::size_t size);
     int sceHttp2GetStatusCode(int req, int *status);
     int sceHttp2ReadData(int req, void *data, std::size_t size);
+    int sceHttp2SetConnectTimeOut(int req, std::uint32_t usec);
+    int sceHttp2SetSendTimeOut(int req, std::uint32_t usec);
+    int sceHttp2SetRecvTimeOut(int req, std::uint32_t usec);
+    int sceHttp2SetAutoRedirect(int req, int enable);
+    int sceHttp2SslDisableOption(int target, std::uint32_t options);
 }
 #endif
 
@@ -155,17 +160,18 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
     static std::mutex s_http_mutex;
     std::lock_guard<std::mutex> net_lock(s_http_mutex);
 
+    const char *method_str = (method == 1) ? "POST" : "GET";
+    MACHETE_LOG("[CLOUD]", "Iniciando peticion HTTP %s a %s (body=%zu bytes)",
+                method_str, url.c_str(), body_data.size());
+
     if (s_http < 0)
     {
-        sceSysmoduleLoadModule(0x000c); // SCE_SYSMODULE_NET
-        sceSysmoduleLoadModule(0x0017); // SCE_SYSMODULE_SSL
-        sceSysmoduleLoadModule(0x002c); // SCE_SYSMODULE_HTTP2
-
         (void)sceNetInit();
         s_pool = sceNetPoolCreate("MacheteNet", 64 * 1024, 0);
         if (s_pool < 0)
         {
             resp.error = "Error al crear pool de red (0x" + std::to_string(s_pool) + ")";
+            MACHETE_LOG("[CLOUD]", "%s", resp.error.c_str());
             return resp;
         }
 
@@ -173,6 +179,7 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
         if (s_ssl < 0)
         {
             resp.error = "Error al inicializar SSL (0x" + std::to_string(s_ssl) + ")";
+            MACHETE_LOG("[CLOUD]", "%s", resp.error.c_str());
             return resp;
         }
 
@@ -180,6 +187,7 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
         if (s_http < 0)
         {
             resp.error = "Error al inicializar sceHttp2 (0x" + std::to_string(s_http) + ")";
+            MACHETE_LOG("[CLOUD]", "%s", resp.error.c_str());
             return resp;
         }
     }
@@ -187,13 +195,27 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
     int tmpl = sceHttp2CreateTemplate(s_http, "MacheteSVG-PS5/1.0.0", 3, 1);
     if (tmpl >= 0)
     {
-        const char *method_str = (method == 1) ? "POST" : "GET";
-        int req = sceHttp2CreateRequestWithURL(tmpl, method_str, url.c_str(), 0);
+        // Deshabilitar verificaciones SSL estrictas si la consola no posee los certificados raiz de Google
+        (void)sceHttp2SslDisableOption(tmpl, 0x01 | 0x02 | 0x04);
+
+        const std::uint64_t req_body_len = (method == 1) ? body_data.size() : 0;
+        int req = sceHttp2CreateRequestWithURL(tmpl, method_str, url.c_str(), req_body_len);
         if (req >= 0)
         {
+            (void)sceHttp2SslDisableOption(req, 0x01 | 0x02 | 0x04);
+            (void)sceHttp2SetConnectTimeOut(req, 8'000'000); // 8 segundos
+            (void)sceHttp2SetSendTimeOut(req, 10'000'000);   // 10 segundos
+            (void)sceHttp2SetRecvTimeOut(req, 15'000'000);   // 15 segundos
+            (void)sceHttp2SetAutoRedirect(req, 1);
+
             for (const auto &h : headers)
             {
                 sceHttp2AddRequestHeader(req, h.first.c_str(), h.second.c_str(), 0);
+            }
+            if (method == 1 && !body_data.empty())
+            {
+                const std::string clen = std::to_string(body_data.size());
+                sceHttp2AddRequestHeader(req, "Content-Length", clen.c_str(), 0);
             }
 
             int send_res = sceHttp2SendRequest(
@@ -212,25 +234,29 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
                         break;
                     resp.body.append(buffer, static_cast<std::size_t>(read_bytes));
                     if (resp.body.size() > 4 * 1024 * 1024)
-                        break; // Límite de 4MB por respuesta
+                        break; // Limite de 4MB por respuesta
                 }
+                MACHETE_LOG("[CLOUD]", "HTTP %s respuesta: status=%d, body=%zu bytes",
+                            url.c_str(), resp.status, resp.body.size());
             }
             else
             {
-                resp.error = "Fallo de conexión o resolución DNS (sceHttp2SendRequest: " +
-                             std::to_string(send_res) + ")";
+                resp.error = "Fallo sceHttp2SendRequest (" + std::to_string(send_res) + ")";
+                MACHETE_LOG("[CLOUD]", "Fallo al enviar HTTP a %s: code=%d", url.c_str(), send_res);
             }
             sceHttp2DeleteRequest(req);
         }
         else
         {
-            resp.error = "Error al crear petición HTTP2";
+            resp.error = "Error al crear peticion HTTP2";
+            MACHETE_LOG("[CLOUD]", "Error en sceHttp2CreateRequestWithURL para %s", url.c_str());
         }
         sceHttp2DeleteTemplate(tmpl);
     }
     else
     {
         resp.error = "Error al crear plantilla HTTP2";
+        MACHETE_LOG("[CLOUD]", "Error en sceHttp2CreateTemplate");
     }
 
 #else
@@ -342,22 +368,24 @@ bool GoogleDrive::load_tokens()
     refresh_token_ = extract_json_string(content, "refresh_token");
     root_folder_id_ = extract_json_string(content, "root_folder_id");
 
-    // Descartar tokens mock, tokens ficticios de prueba o cadenas corruptas
-    if (refresh_token_.empty() ||
+    // Validar formato estricto de Google OAuth: access_token inicia con ya29. y refresh_token inicia con 1//
+    if (refresh_token_.empty() || refresh_token_.rfind("1//", 0) != 0 ||
+        access_token_.empty() || access_token_.rfind("ya29.", 0) != 0 ||
         refresh_token_.find("mock") != std::string::npos ||
-        refresh_token_.find("host_") != std::string::npos ||
-        refresh_token_.length() < 20)
+        refresh_token_.find("host_") != std::string::npos)
     {
         refresh_token_.clear();
         access_token_.clear();
         root_folder_id_.clear();
         auth_state_.store(AuthState::Unauthenticated);
         std::remove(kClientAuthPath);
+        MACHETE_LOG("[CLOUD]", "Credenciales descartadas: no cumplen formato oficial de Google OAuth");
         return false;
     }
 
     // Token con formato legítimo detectado
     auth_state_.store(AuthState::Authorized);
+    MACHETE_LOG("[CLOUD]", "Credenciales de Google Drive cargadas con exito");
     return true;
 }
 
@@ -441,6 +469,7 @@ void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> 
         {
             const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
             const std::string client_id = get_effective_client_id();
+            MACHETE_LOG("[CLOUD]", "Iniciando Device Auth con client_id: %s", client_id.c_str());
 
             // Petición inicial RFC 8628 Device Authorization a Google
             const std::string post_body =
@@ -462,6 +491,8 @@ void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> 
                 auth_state_.store(AuthState::Error);
                 std::lock_guard<std::mutex> lock(mutex_);
                 std::string err_str = extract_json_string(resp.body, "error");
+                MACHETE_LOG("[CLOUD]", "Fallo al solicitar codigo OAuth (status=%d, error='%s', body='%s')",
+                            resp.status, resp.error.c_str(), resp.body.c_str());
 
                 if (err_str == "restricted_client" || err_str == "invalid_client" ||
                     err_str == "unauthorized_client")
@@ -473,8 +504,8 @@ void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> 
                 }
                 else if (!resp.error.empty())
                 {
-                    last_error_ = is_es ? "Sin conexion a la red en la consola"
-                                        : "No network connection on console";
+                    last_error_ = is_es ? ("Error de red (" + resp.error + ")")
+                                        : ("Network error (" + resp.error + ")");
                     user_code_ = is_es ? "SIN RED" : "OFFLINE";
                 }
                 else
@@ -504,8 +535,12 @@ void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> 
                 last_error_ = is_es ? "Respuesta inesperada de Google"
                                     : "Unexpected response from Google";
                 user_code_ = is_es ? "ERROR" : "ERROR";
+                MACHETE_LOG("[CLOUD]", "Respuesta inesperada sin user_code o device_code");
                 return;
             }
+
+            MACHETE_LOG("[CLOUD]", "Codigo de vinculacion obtenido con exito: %s (expira en %ds)",
+                        info.user_code.c_str(), info.expires_in);
 
             {
                 std::lock_guard<std::mutex> lock(mutex_);
