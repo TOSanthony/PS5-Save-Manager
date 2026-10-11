@@ -10,7 +10,6 @@
 #include <cerrno>
 #include <cstdio>
 #include <dirent.h>
-#include <sys/mount.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -32,17 +31,6 @@ std::string sanitize_folder_name(std::string name)
 }
 
 std::uint64_t previous_usb_mask = 0;
-
-bool is_mount_point(const char *path)
-{
-    struct stat st_path{};
-    struct stat st_parent{};
-    if (stat(path, &st_path) != 0)
-        return false;
-    if (stat("/mnt", &st_parent) != 0)
-        return false;
-    return (st_path.st_dev != st_parent.st_dev);
-}
 
 } // namespace
 
@@ -154,13 +142,8 @@ std::vector<StorageDevice> scan_storage_devices()
         {
             mkdir(dev.root_dir.c_str(), 0777);
             chmod(dev.root_dir.c_str(), 0777);
-
-            struct statfs fs{};
-            if (statfs(dev.root_dir.c_str(), &fs) == 0 || statfs("/data", &fs) == 0)
-            {
-                dev.free_bytes = static_cast<std::uint64_t>(fs.f_bavail) * fs.f_bsize;
-                dev.total_bytes = static_cast<std::uint64_t>(fs.f_blocks) * fs.f_bsize;
-            }
+            dev.free_bytes = 0;
+            dev.total_bytes = 0;
         }
         devices.push_back(dev);
     }
@@ -168,10 +151,21 @@ std::vector<StorageDevice> scan_storage_devices()
     // 2. SSD de Expansión M.2 (/mnt/ext1 o /mnt/ext0)
     {
         std::string ssd_path;
-        if (access("/mnt/ext1", F_OK) == 0 && is_mount_point("/mnt/ext1"))
+        DIR *dir_ext1 = opendir("/mnt/ext1");
+        if (dir_ext1)
+        {
+            closedir(dir_ext1);
             ssd_path = "/mnt/ext1";
-        else if (access("/mnt/ext0", F_OK) == 0 && is_mount_point("/mnt/ext0"))
-            ssd_path = "/mnt/ext0";
+        }
+        else
+        {
+            DIR *dir_ext0 = opendir("/mnt/ext0");
+            if (dir_ext0)
+            {
+                closedir(dir_ext0);
+                ssd_path = "/mnt/ext0";
+            }
+        }
 
         if (!ssd_path.empty())
         {
@@ -182,13 +176,8 @@ std::vector<StorageDevice> scan_storage_devices()
             dev.mount_path = ssd_path;
             dev.root_dir = ssd_path + "/" + ROOT_DIR_NAME;
             dev.connected = true;
-
-            struct statfs fs{};
-            if (statfs(ssd_path.c_str(), &fs) == 0)
-            {
-                dev.free_bytes = static_cast<std::uint64_t>(fs.f_bavail) * fs.f_bsize;
-                dev.total_bytes = static_cast<std::uint64_t>(fs.f_blocks) * fs.f_bsize;
-            }
+            dev.free_bytes = 0;
+            dev.total_bytes = 0;
             devices.push_back(dev);
         }
     }
@@ -199,8 +188,10 @@ std::vector<StorageDevice> scan_storage_devices()
         char usb_path[32];
         std::snprintf(usb_path, sizeof(usb_path), "/mnt/usb%d", i);
 
-        if (access(usb_path, F_OK) == 0 && is_mount_point(usb_path))
+        DIR *usb_dir = opendir(usb_path);
+        if (usb_dir)
         {
+            closedir(usb_dir);
             StorageDevice dev;
             dev.type = StorageType::USB;
             dev.id = "usb" + std::to_string(i);
@@ -212,13 +203,8 @@ std::vector<StorageDevice> scan_storage_devices()
             dev.mount_path = usb_path;
             dev.root_dir = std::string(usb_path) + "/" + ROOT_DIR_NAME;
             dev.connected = true;
-
-            struct statfs fs{};
-            if (statfs(usb_path, &fs) == 0)
-            {
-                dev.free_bytes = static_cast<std::uint64_t>(fs.f_bavail) * fs.f_bsize;
-                dev.total_bytes = static_cast<std::uint64_t>(fs.f_blocks) * fs.f_bsize;
-            }
+            dev.free_bytes = 0;
+            dev.total_bytes = 0;
             devices.push_back(dev);
         }
     }
@@ -248,8 +234,12 @@ bool poll_storage_changes(std::vector<StorageDevice> &out_devices, std::string &
     {
         char usb_path[32];
         std::snprintf(usb_path, sizeof(usb_path), "/mnt/usb%d", i);
-        if (access(usb_path, F_OK) == 0 && is_mount_point(usb_path))
+        DIR *dir = opendir(usb_path);
+        if (dir)
+        {
+            closedir(dir);
             current_usb_mask |= (1ULL << i);
+        }
     }
 
     const std::string internal_path = "/data/" + std::string(ROOT_DIR_NAME);
