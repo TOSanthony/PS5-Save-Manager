@@ -18,6 +18,11 @@
 #include <vector>
 
 #if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+
 extern "C"
 {
     int sceNetInit(void);
@@ -43,6 +48,47 @@ extern "C"
     int sceHttp2SetResolveRetry(int req, int retry);
     int sceHttp2SetAutoRedirect(int req, int enable);
     int sceHttp2SslDisableOption(int target, std::uint32_t options);
+}
+
+static bool check_domain_dns(const char *hostname, std::string &diag_msg)
+{
+    struct addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo *res = nullptr;
+
+    const int rc = getaddrinfo(hostname, nullptr, &hints, &res);
+    if (rc != 0)
+    {
+        diag_msg = std::string("Fallo resolucion DNS: ") + gai_strerror(rc);
+        MACHETE_LOG("[CLOUD]", "DNS check para %s fallo: %s", hostname, diag_msg.c_str());
+        return false;
+    }
+
+    bool blocked = false;
+    char ip_str[INET_ADDRSTRLEN] = {0};
+    for (struct addrinfo *p = res; p != nullptr; p = p->ai_next)
+    {
+        if (p->ai_family == AF_INET)
+        {
+            auto *addr = reinterpret_cast<struct sockaddr_in *>(p->ai_addr);
+            inet_ntop(AF_INET, &(addr->sin_addr), ip_str, sizeof(ip_str));
+            MACHETE_LOG("[CLOUD]", "DNS check: %s -> %s", hostname, ip_str);
+            if (std::strcmp(ip_str, "127.0.0.1") == 0 || std::strcmp(ip_str, "0.0.0.0") == 0)
+            {
+                blocked = true;
+            }
+        }
+    }
+    freeaddrinfo(res);
+
+    if (blocked)
+    {
+        diag_msg = std::string("DNS bloqueado/redirigido a ") + ip_str + " por ESP32/DNS de la consola";
+        MACHETE_LOG("[CLOUD]", "ALERTA: %s", diag_msg.c_str());
+        return false;
+    }
+    return true;
 }
 #endif
 
@@ -250,25 +296,42 @@ std::string package_directory_or_file(const std::string &local_path)
     return archive;
 }
 
+static bool ensure_dirs_safe(const std::string &path)
+{
+    if (path.empty())
+        return false;
+
+    struct stat st{};
+    if (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
+        return true;
+
+    std::string cur;
+    for (std::size_t i = 0; i < path.size(); ++i)
+    {
+        cur += path[i];
+        if (path[i] == '/' || i == path.size() - 1)
+        {
+            if (cur.empty() || cur == "/")
+                continue;
+
+            if (stat(cur.c_str(), &st) == 0)
+                continue;
+
+            if (mkdir(cur.c_str(), 0777) == 0)
+            {
+                (void)chmod(cur.c_str(), 0777);
+            }
+        }
+    }
+    return true;
+}
+
 bool extract_archive_to_directory(const std::string &data, const std::string &dest_dir)
 {
     if (data.size() < 12)
         return false;
 
-    // Asegurar directorio destino
-    std::string cur;
-    for (std::size_t c = 0; c < dest_dir.size(); ++c)
-    {
-        cur += dest_dir[c];
-        if (dest_dir[c] == '/' || c == dest_dir.size() - 1)
-        {
-            if (!cur.empty() && cur != "/")
-            {
-                mkdir(cur.c_str(), 0777);
-                (void)chmod(cur.c_str(), 0777);
-            }
-        }
-    }
+    ensure_dirs_safe(dest_dir);
 
     if (std::memcmp(data.data(), "MCHTARCH", 8) == 0)
     {
@@ -301,19 +364,7 @@ bool extract_archive_to_directory(const std::string &data, const std::string &de
             if (slash != std::string::npos)
             {
                 const std::string parent = target_file.substr(0, slash);
-                std::string p_cur;
-                for (std::size_t c = 0; c < parent.size(); ++c)
-                {
-                    p_cur += parent[c];
-                    if (parent[c] == '/' || c == parent.size() - 1)
-                    {
-                        if (!p_cur.empty() && p_cur != "/")
-                        {
-                            mkdir(p_cur.c_str(), 0777);
-                            (void)chmod(p_cur.c_str(), 0777);
-                        }
-                    }
-                }
+                ensure_dirs_safe(parent);
             }
 
             // Preservar Keystone de la consola si existe
@@ -330,13 +381,11 @@ bool extract_archive_to_directory(const std::string &data, const std::string &de
                 if (file_sz > 0)
                     std::fwrite(data.data() + offset, 1, static_cast<std::size_t>(file_sz), out);
                 std::fflush(out);
-                fsync(fileno(out));
                 std::fclose(out);
                 (void)chmod(target_file.c_str(), 0666);
             }
             offset += static_cast<std::size_t>(file_sz);
         }
-        sync();
         return true;
     }
     else
@@ -347,10 +396,8 @@ bool extract_archive_to_directory(const std::string &data, const std::string &de
         {
             std::fwrite(data.data(), 1, data.size(), out);
             std::fflush(out);
-            fsync(fileno(out));
             std::fclose(out);
             (void)chmod(target_file.c_str(), 0666);
-            sync();
             return true;
         }
     }
@@ -377,7 +424,7 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
     if (s_http < 0)
     {
         (void)sceNetInit();
-        s_pool = sceNetPoolCreate("MacheteNet", 64 * 1024, 0);
+        s_pool = sceNetPoolCreate("MacheteNet", 256 * 1024, 0);
         if (s_pool < 0)
         {
             resp.error = "Error al crear pool de red (0x" + std::to_string(s_pool) + ")";
@@ -402,7 +449,11 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
         }
     }
 
-    int tmpl = sceHttp2CreateTemplate(s_http, "MacheteSVG-PS5/1.0.0", 2, 1);
+    int tmpl = sceHttp2CreateTemplate(s_http, "MacheteSVG-PS5/1.0.0", 3, 1);
+    if (tmpl < 0)
+    {
+        tmpl = sceHttp2CreateTemplate(s_http, "MacheteSVG-PS5/1.0.0", 2, 1);
+    }
     if (tmpl >= 0)
     {
         // Deshabilitar verificaciones SSL estrictas si la consola no posee los certificados raiz de Google (0x1F)
@@ -450,6 +501,7 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
                 }
                 MACHETE_LOG("[CLOUD]", "HTTP %s respuesta: status=%d, body=%zu bytes",
                             url.c_str(), resp.status, resp.body.size());
+                ::machete::log::flush();
             }
             else
             {
@@ -463,6 +515,7 @@ HttpResponse execute_http_request(const std::string &url, int method, const std:
                 }
                 MACHETE_LOG("[CLOUD]", "Fallo al enviar HTTP a %s: code=%d (%s)",
                             url.c_str(), send_res, resp.error.c_str());
+                ::machete::log::flush();
             }
             sceHttp2DeleteRequest(req);
         }
@@ -697,6 +750,22 @@ void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> 
                 (void)jailbreak::request_jailbreak();
             }
 
+#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
+            std::string dns_diag;
+            if (!check_domain_dns("oauth2.googleapis.com", dns_diag))
+            {
+                auth_state_.store(AuthState::Error);
+                std::lock_guard<std::mutex> lock(mutex_);
+                last_error_ = is_es
+                    ? "DNS bloquea Google (0x8041013D): oauth2.googleapis.com redirigido. Configura DNS secundario o lista blanca en ESP32."
+                    : "DNS blocks Google (0x8041013D): oauth2.googleapis.com redirected. Configure secondary DNS or whitelist in ESP32.";
+                user_code_ = is_es ? "DNS BLOQ" : "DNS BLOCK";
+                MACHETE_LOG("[CLOUD]", "%s", dns_diag.c_str());
+                ::machete::log::flush();
+                return;
+            }
+#endif
+
             // Petición inicial RFC 8628 Device Authorization a Google
             const std::string post_body =
                 "client_id=" + client_id +
@@ -719,6 +788,7 @@ void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> 
                 std::string err_str = extract_json_string(resp.body, "error");
                 MACHETE_LOG("[CLOUD]", "Fallo al solicitar codigo OAuth (status=%d, error='%s', body='%s')",
                             resp.status, resp.error.c_str(), resp.body.c_str());
+                ::machete::log::flush();
 
                 if (err_str == "restricted_client" || err_str == "invalid_client" ||
                     err_str == "unauthorized_client")
@@ -727,6 +797,15 @@ void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> 
                         ? "Google Drive requiere credenciales. Coloca client_id.txt en /data/MacheteSVG/"
                         : "Google Drive requires setup. Place client_id.txt in /data/MacheteSVG/";
                     user_code_ = is_es ? "CONFIGURAR" : "CONFIGURE";
+                }
+                else if (resp.error.find("0x8041013D") != std::string::npos ||
+                         resp.error.find("rechazada") != std::string::npos ||
+                         resp.error.find("refused") != std::string::npos)
+                {
+                    last_error_ = is_es
+                        ? "Conexion rechazada (0x8041013D): tu DNS/ESP32 bloquea Google. Desbloquea googleapis.com."
+                        : "Connection refused (0x8041013D): your DNS/ESP32 blocks Google. Whitelist googleapis.com.";
+                    user_code_ = is_es ? "DNS BLOQ" : "DNS BLOCK";
                 }
                 else if (!resp.error.empty())
                 {

@@ -26,15 +26,27 @@ bool ensure_directories_recursive(const std::string &path)
     if (path.empty())
         return false;
 
+    // Si ya existe fisicamente como directorio, no hacer nada para no alterar permisos de rutas del sistema
+    struct stat st{};
+    if (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode))
+        return true;
+
     std::string current;
     for (std::size_t i = 0; i < path.size(); ++i)
     {
         current += path[i];
         if (path[i] == '/' || i == path.size() - 1)
         {
-            if (!current.empty() && current != "/")
+            if (current.empty() || current == "/")
+                continue;
+
+            // Si el componente ya existe fisicamente (como /user, /user/home, /data), omitir
+            if (stat(current.c_str(), &st) == 0)
+                continue;
+
+            // Solo crear directorios que realmente no existian
+            if (mkdir(current.c_str(), 0777) == 0)
             {
-                mkdir(current.c_str(), 0777);
                 (void)chmod(current.c_str(), 0777);
             }
         }
@@ -152,12 +164,13 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
     }
 
     std::fflush(out);
-    fsync(fileno(out)); // Forzar escritura física en disco
     std::fclose(out);
     std::fclose(in);
 
     // Otorgar permisos abiertos al destino para que Prospero y los juegos puedan leerlo libremente
     (void)chmod(dst.c_str(), 0666);
+    MACHETE_LOG("[COPY]", "Archivo completado: %s", dst.c_str());
+    ::machete::log::flush();
     return ok;
 }
 
@@ -274,12 +287,8 @@ std::string resolve_default_save_path(const scanner::ScannedGame &game)
     const std::string base_dir = std::string("/user/home/") + user_id + "/" +
                                  (is_ps5 ? "savedata_prospero" : "savedata");
 
-    mkdir(base_dir.c_str(), 0777);
-    (void)chmod(base_dir.c_str(), 0777);
-
     const std::string target = base_dir + "/" + game.title_id;
-    mkdir(target.c_str(), 0777);
-    (void)chmod(target.c_str(), 0777);
+    ensure_directories_recursive(target);
     return target;
 }
 
@@ -357,20 +366,6 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
                 game.save_path.c_str(), dest_game_folder.c_str());
     const bool ok = copy_directory_recursive(game.save_path, dest_game_folder, files_count,
                                              bytes_copied, total_bytes, progress_cb, false);
-
-    if (progress_cb)
-    {
-        OperationProgress p;
-        p.bytes_transferred = bytes_copied;
-        p.total_bytes = total_bytes > 0 ? total_bytes : bytes_copied;
-        p.files_transferred = files_count;
-        p.progress = 0.99f;
-        p.current_file = is_es ? "Sincronizando vnodes de disco..." : "Syncing vnode caches...";
-        progress_cb(p);
-    }
-
-    // Sincronizar sistema de archivos globalmente para invalidar cachés vnode de PS4 (#198)
-    sync();
 
     if (progress_cb)
     {
@@ -504,20 +499,6 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
                 backup_game_folder.c_str(), dst_target.c_str());
     const bool ok = copy_directory_recursive(backup_game_folder, dst_target, files_count,
                                              bytes_copied, total_dir_bytes, progress_cb, true);
-
-    if (progress_cb)
-    {
-        OperationProgress p;
-        p.bytes_transferred = bytes_copied;
-        p.total_bytes = total_dir_bytes > 0 ? total_dir_bytes : bytes_copied;
-        p.files_transferred = files_count;
-        p.progress = 0.99f;
-        p.current_file = is_es ? "Sincronizando vnodes de disco..." : "Syncing vnode caches...";
-        progress_cb(p);
-    }
-
-    // Sincronizar buffers de disco y vnodes
-    sync();
 
     if (progress_cb)
     {
@@ -804,20 +785,6 @@ OperationResult restore_backup_item(const scanner::ScannedGame &game,
                 backup.folder_path.c_str(), dst_target.c_str(), static_cast<unsigned long long>(total_bytes));
     const bool ok = copy_directory_recursive(backup.folder_path, dst_target, files_count,
                                              bytes_copied, total_bytes, progress_cb, true);
-
-    if (progress_cb)
-    {
-        OperationProgress p;
-        p.bytes_transferred = bytes_copied;
-        p.total_bytes = total_bytes > 0 ? total_bytes : bytes_copied;
-        p.files_transferred = files_count;
-        p.progress = 0.99f;
-        p.current_file = is_es ? "Sincronizando vnodes de disco..." : "Syncing vnode caches...";
-        progress_cb(p);
-    }
-
-    // Sincronizar buffers de disco y vnodes
-    sync();
 
     if (progress_cb)
     {

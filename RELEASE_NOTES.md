@@ -43,7 +43,7 @@ Built with a hardware-accelerated OpenGL 4.6 SDF renderer, MacheteSVG delivers a
 #### 1. Zero-Corruption Save Architecture
 - **Keystone File Preservation:** Preserves console-specific `sce_sys/keystone` and `sce_sys/param.sfo` files during restoration. Only save payload containers (e.g., `data000.bin`) are updated, allowing clean auto-resigning of saves downloaded from other users or consoles.
 - **Error CE-108255-1 Elimination:** Employs orderly `sceSaveDataUmount` operations, allowing the Prospero kernel to seal PFS containers cleanly.
-- **Global vnode Flush:** Enforces atomic writes followed by `sync()` / `fsync()`, invalidating FreeBSD vnode caches so backwards-compatible PS4 games reload modified saves immediately without console restarts.
+- **Non-Blocking Clean Vnode Write:** Enforces clean atomic POSIX stream flushing without thread-blocking kernel fsync locks, preventing system watchdog timeouts and kernel lockups.
 - **Dummy Save Safeguard:** Prompts users to run newly installed games once before restoring saves to generate genuine local hardware keys.
 
 #### 2. Google Drive Cloud Synchronization
@@ -80,7 +80,7 @@ Built with a hardware-accelerated OpenGL 4.6 SDF renderer, MacheteSVG delivers a
 
 | File | Size | SHA-256 Checksum |
 | :--- | :--- | :--- |
-| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,943,303 bytes) | `8c48145bb93700f49498e1d8501bf32e00b2e2f6b0a598ff9af0c8954d3c7fa6` |
+| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,944,398 bytes) | `9fadc722be6820cb2afa2c93411c779b7be56ab5451a7d701556553a71a928a2` |
 
 All package files are validated with open-mode permissions (`0777`) for out-of-the-box execution on jailbroken PlayStation 5 systems.
 
@@ -134,7 +134,7 @@ Desarrollado con renderizado acelerado por hardware OpenGL 4.6 SDF, MacheteSVG o
 #### 1. Arquitectura de Guardado con Cero Corrupción
 - **Preservación del Archivo Keystone:** Mantiene intactos los archivos de consola `sce_sys/keystone` y `sce_sys/param.sfo` durante la restauración. Solo se actualiza el contenedor de datos (`data000.bin`), permitiendo resignar partidas descargadas de otros usuarios sin rechazo del sistema.
 - **Eliminación del Error CE-108255-1:** Realiza un desmontaje ordenado mediante `sceSaveDataUmount`, permitiendo que el kernel de Prospero selle los contenedores PFS de forma limpia.
-- **Vaciado de Caché vnode:** Aplica escrituras atómicas junto con `sync()` / `fsync()`, invalidando las cachés de vnodes de FreeBSD para que los juegos de PS4 en retrocompatibilidad carguen las partidas de inmediato sin reiniciar la consola.
+- **Escritura Limpia de Vnodes sin Bloqueo:** Realiza vaciado limpio de flujos POSIX sin bloqueos de fsync en el kernel, previniendo congelamientos y el reinicio forzado del sistema.
 - **Protección de Partida Base:** Avisa al usuario para iniciar una vez cualquier juego nuevo y generar las claves criptográficas locales legítimas.
 
 #### 2. Sincronización en la Nube con Google Drive
@@ -171,7 +171,7 @@ Desarrollado con renderizado acelerado por hardware OpenGL 4.6 SDF, MacheteSVG o
 
 | Archivo | Tamaño | Suma de Verificación SHA-256 |
 | :--- | :--- | :--- |
-| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,943,303 bytes) | `8c48145bb93700f49498e1d8501bf32e00b2e2f6b0a598ff9af0c8954d3c7fa6` |
+| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,944,398 bytes) | `9fadc722be6820cb2afa2c93411c779b7be56ab5451a7d701556553a71a928a2` |
 
 Todos los archivos han sido generados y verificados con permisos de modo abierto (`0777`) para ejecución inmediata en consolas PlayStation 5.
 
