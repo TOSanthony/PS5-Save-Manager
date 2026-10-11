@@ -21,7 +21,7 @@ namespace machete::save
 namespace
 {
 
-bool ensure_directories_recursive(const std::string &path)
+bool ensure_directories_recursive(const std::string &path, uid_t owner_uid = 0, gid_t owner_gid = 0)
 {
     if (path.empty())
         return false;
@@ -48,10 +48,38 @@ bool ensure_directories_recursive(const std::string &path)
             if (mkdir(current.c_str(), 0777) == 0)
             {
                 (void)chmod(current.c_str(), 0777);
+                if (owner_uid != 0 || owner_gid != 0)
+                {
+                    (void)chown(current.c_str(), owner_uid, owner_gid);
+                }
             }
         }
     }
     return true;
+}
+
+void resolve_path_ownership(const std::string &path, uid_t &uid, gid_t &gid)
+{
+    uid = 0;
+    gid = 0;
+    std::string cur = path;
+    while (!cur.empty() && cur != "/")
+    {
+        struct stat st{};
+        if (stat(cur.c_str(), &st) == 0)
+        {
+            if (st.st_uid != 0 || st.st_gid != 0)
+            {
+                uid = st.st_uid;
+                gid = st.st_gid;
+                return;
+            }
+        }
+        std::size_t slash = cur.find_last_of('/');
+        if (slash == std::string::npos || slash == 0)
+            break;
+        cur = cur.substr(0, slash);
+    }
 }
 
 std::string sanitize_name(std::string name)
@@ -100,7 +128,8 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
                           std::uint64_t &bytes_copied,
                           std::uint64_t total_bytes,
                           int files_count,
-                          const ProgressCallback &progress_cb)
+                          const ProgressCallback &progress_cb,
+                          uid_t owner_uid = 0, gid_t owner_gid = 0)
 {
     std::FILE *in = std::fopen(src.c_str(), "rb");
     if (!in)
@@ -164,11 +193,20 @@ bool copy_file_with_fsync(const std::string &src, const std::string &dst,
     }
 
     std::fflush(out);
+    int fd = fileno(out);
+    if (fd >= 0)
+    {
+        fsync(fd);
+    }
     std::fclose(out);
     std::fclose(in);
 
     // Otorgar permisos abiertos al destino para que Prospero y los juegos puedan leerlo libremente
     (void)chmod(dst.c_str(), 0666);
+    if (owner_uid != 0 || owner_gid != 0)
+    {
+        (void)chown(dst.c_str(), owner_uid, owner_gid);
+    }
     MACHETE_LOG("[COPY]", "Archivo completado: %s", dst.c_str());
     ::machete::log::flush();
     return ok;
@@ -178,28 +216,17 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
                               int &files_count, std::uint64_t &bytes_copied,
                               std::uint64_t total_bytes,
                               const ProgressCallback &progress_cb,
-                              bool is_restoring = false)
+                              uid_t owner_uid = 0, gid_t owner_gid = 0)
 {
     struct stat src_st{};
     if (stat(src_dir.c_str(), &src_st) == 0 && S_ISREG(src_st.st_mode))
     {
-        ensure_directories_recursive(dst_dir);
+        ensure_directories_recursive(dst_dir, owner_uid, owner_gid);
         std::size_t slash = src_dir.find_last_of('/');
         std::string filename = (slash != std::string::npos) ? src_dir.substr(slash + 1) : src_dir;
         std::string dst_file = dst_dir + "/" + filename;
 
-        // Preservación estricta de Keystone: no sobreescribir el keystone local de la consola si existe
-        if (is_restoring && (filename == "keystone" || filename == "KEYSTONE"))
-        {
-            if (access(dst_file.c_str(), F_OK) == 0)
-            {
-                MACHETE_LOG("[RESTORE]", "Preservando keystone original de la consola: %s", dst_file.c_str());
-                files_count++;
-                return true;
-            }
-        }
-
-        if (copy_file_with_fsync(src_dir, dst_file, bytes_copied, total_bytes, files_count, progress_cb))
+        if (copy_file_with_fsync(src_dir, dst_file, bytes_copied, total_bytes, files_count, progress_cb, owner_uid, owner_gid))
         {
             files_count++;
             return true;
@@ -207,7 +234,7 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
         return false;
     }
 
-    ensure_directories_recursive(dst_dir);
+    ensure_directories_recursive(dst_dir, owner_uid, owner_gid);
 
     DIR *dir = opendir(src_dir.c_str());
     if (!dir)
@@ -226,29 +253,18 @@ bool copy_directory_recursive(const std::string &src_dir, const std::string &dst
         const std::string src_path = src_dir + "/" + entry->d_name;
         const std::string dst_path = dst_dir + "/" + entry->d_name;
 
-        // Preservación de Keystone durante la restauración
-        if (is_restoring && (std::strcmp(entry->d_name, "keystone") == 0 || std::strcmp(entry->d_name, "KEYSTONE") == 0))
-        {
-            if (access(dst_path.c_str(), F_OK) == 0)
-            {
-                MACHETE_LOG("[RESTORE]", "Preservando keystone original de consola: %s", dst_path.c_str());
-                files_count++;
-                continue;
-            }
-        }
-
         struct stat st{};
         if (stat(src_path.c_str(), &st) == 0)
         {
             if (S_ISDIR(st.st_mode))
             {
-                ensure_directories_recursive(dst_path);
-                if (!copy_directory_recursive(src_path, dst_path, files_count, bytes_copied, total_bytes, progress_cb, is_restoring))
+                ensure_directories_recursive(dst_path, owner_uid, owner_gid);
+                if (!copy_directory_recursive(src_path, dst_path, files_count, bytes_copied, total_bytes, progress_cb, owner_uid, owner_gid))
                     all_ok = false;
             }
             else
             {
-                if (copy_file_with_fsync(src_path, dst_path, bytes_copied, total_bytes, files_count, progress_cb))
+                if (copy_file_with_fsync(src_path, dst_path, bytes_copied, total_bytes, files_count, progress_cb, owner_uid, owner_gid))
                 {
                     files_count++;
                 }
@@ -365,7 +381,8 @@ OperationResult backup_game_save(const scanner::ScannedGame &game,
     MACHETE_LOG("[BACKUP]", "Iniciando respaldo de %s hacia %s",
                 game.save_path.c_str(), dest_game_folder.c_str());
     const bool ok = copy_directory_recursive(game.save_path, dest_game_folder, files_count,
-                                             bytes_copied, total_bytes, progress_cb, false);
+                                             bytes_copied, total_bytes, progress_cb);
+    ::sync();
 
     if (progress_cb)
     {
@@ -491,14 +508,20 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
             dst_target = dst_target.substr(0, slash);
     }
 
-    ensure_directories_recursive(dst_target);
+    uid_t target_uid = 0;
+    gid_t target_gid = 0;
+    resolve_path_ownership(dst_target, target_uid, target_gid);
+    ensure_directories_recursive(dst_target, target_uid, target_gid);
 
     int files_count = 0;
     std::uint64_t bytes_copied = 0;
-    MACHETE_LOG("[RESTORE]", "Restaurando desde %s hacia %s",
-                backup_game_folder.c_str(), dst_target.c_str());
+    MACHETE_LOG("[RESTORE]", "Restaurando desde %s hacia %s (uid=%d, gid=%d)",
+                backup_game_folder.c_str(), dst_target.c_str(),
+                static_cast<int>(target_uid), static_cast<int>(target_gid));
     const bool ok = copy_directory_recursive(backup_game_folder, dst_target, files_count,
-                                             bytes_copied, total_dir_bytes, progress_cb, true);
+                                             bytes_copied, total_dir_bytes, progress_cb,
+                                             target_uid, target_gid);
+    ::sync();
 
     if (progress_cb)
     {
@@ -518,10 +541,8 @@ OperationResult restore_game_save(const scanner::ScannedGame &game,
     if (res.success)
     {
         res.message = is_es
-                          ? ("Restauracion exitosa (" + std::to_string(files_count) +
-                             " archivos) con Keystone preservado")
-                          : ("Restore successful (" + std::to_string(files_count) +
-                             " files) with Keystone preserved");
+                          ? ("Restauracion exitosa (" + std::to_string(files_count) + " archivos)")
+                          : ("Restore successful (" + std::to_string(files_count) + " files)");
         MACHETE_LOG("[RESTORE]", "Restauracion completada exitosamente: %d archivos", files_count);
     }
     else
@@ -773,7 +794,10 @@ OperationResult restore_backup_item(const scanner::ScannedGame &game,
             dst_target = dst_target.substr(0, slash);
     }
 
-    ensure_directories_recursive(dst_target);
+    uid_t target_uid = 0;
+    gid_t target_gid = 0;
+    resolve_path_ownership(dst_target, target_uid, target_gid);
+    ensure_directories_recursive(dst_target, target_uid, target_gid);
 
     std::uint64_t total_bytes = backup.total_bytes;
     if (total_bytes == 0)
@@ -781,10 +805,14 @@ OperationResult restore_backup_item(const scanner::ScannedGame &game,
 
     int files_count = 0;
     std::uint64_t bytes_copied = 0;
-    MACHETE_LOG("[RESTORE]", "Iniciando copia recursiva desde %s hacia %s (total=%llu bytes)",
-                backup.folder_path.c_str(), dst_target.c_str(), static_cast<unsigned long long>(total_bytes));
+    MACHETE_LOG("[RESTORE]", "Iniciando copia recursiva desde %s hacia %s (total=%llu bytes, uid=%d, gid=%d)",
+                backup.folder_path.c_str(), dst_target.c_str(),
+                static_cast<unsigned long long>(total_bytes),
+                static_cast<int>(target_uid), static_cast<int>(target_gid));
     const bool ok = copy_directory_recursive(backup.folder_path, dst_target, files_count,
-                                             bytes_copied, total_bytes, progress_cb, true);
+                                             bytes_copied, total_bytes, progress_cb,
+                                             target_uid, target_gid);
+    ::sync();
 
     if (progress_cb)
     {

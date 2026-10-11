@@ -18,11 +18,6 @@
 #include <vector>
 
 #if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-
 extern "C"
 {
     int sceNetInit(void);
@@ -48,47 +43,6 @@ extern "C"
     int sceHttp2SetResolveRetry(int req, int retry);
     int sceHttp2SetAutoRedirect(int req, int enable);
     int sceHttp2SslDisableOption(int target, std::uint32_t options);
-}
-
-static bool check_domain_dns(const char *hostname, std::string &diag_msg)
-{
-    struct addrinfo hints{};
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    struct addrinfo *res = nullptr;
-
-    const int rc = getaddrinfo(hostname, nullptr, &hints, &res);
-    if (rc != 0)
-    {
-        diag_msg = std::string("Fallo resolucion DNS: ") + gai_strerror(rc);
-        MACHETE_LOG("[CLOUD]", "DNS check para %s fallo: %s", hostname, diag_msg.c_str());
-        return false;
-    }
-
-    bool blocked = false;
-    char ip_str[INET_ADDRSTRLEN] = {0};
-    for (struct addrinfo *p = res; p != nullptr; p = p->ai_next)
-    {
-        if (p->ai_family == AF_INET)
-        {
-            auto *addr = reinterpret_cast<struct sockaddr_in *>(p->ai_addr);
-            inet_ntop(AF_INET, &(addr->sin_addr), ip_str, sizeof(ip_str));
-            MACHETE_LOG("[CLOUD]", "DNS check: %s -> %s", hostname, ip_str);
-            if (std::strcmp(ip_str, "127.0.0.1") == 0 || std::strcmp(ip_str, "0.0.0.0") == 0)
-            {
-                blocked = true;
-            }
-        }
-    }
-    freeaddrinfo(res);
-
-    if (blocked)
-    {
-        diag_msg = std::string("DNS bloqueado/redirigido a ") + ip_str + " por ESP32/DNS de la consola";
-        MACHETE_LOG("[CLOUD]", "ALERTA: %s", diag_msg.c_str());
-        return false;
-    }
-    return true;
 }
 #endif
 
@@ -367,25 +321,23 @@ bool extract_archive_to_directory(const std::string &data, const std::string &de
                 ensure_dirs_safe(parent);
             }
 
-            // Preservar Keystone de la consola si existe
-            if ((rel_path == "keystone" || rel_path == "KEYSTONE") && access(target_file.c_str(), F_OK) == 0)
-            {
-                MACHETE_LOG("[CLOUD]", "Preservando keystone local: %s", target_file.c_str());
-                offset += static_cast<std::size_t>(file_sz);
-                continue;
-            }
-
             std::FILE *out = std::fopen(target_file.c_str(), "wb");
             if (out)
             {
                 if (file_sz > 0)
                     std::fwrite(data.data() + offset, 1, static_cast<std::size_t>(file_sz), out);
                 std::fflush(out);
+                int fd = fileno(out);
+                if (fd >= 0)
+                {
+                    fsync(fd);
+                }
                 std::fclose(out);
                 (void)chmod(target_file.c_str(), 0666);
             }
             offset += static_cast<std::size_t>(file_sz);
         }
+        ::sync();
         return true;
     }
     else
@@ -396,8 +348,14 @@ bool extract_archive_to_directory(const std::string &data, const std::string &de
         {
             std::fwrite(data.data(), 1, data.size(), out);
             std::fflush(out);
+            int fd = fileno(out);
+            if (fd >= 0)
+            {
+                fsync(fd);
+            }
             std::fclose(out);
             (void)chmod(target_file.c_str(), 0666);
+            ::sync();
             return true;
         }
     }
@@ -750,21 +708,6 @@ void GoogleDrive::start_device_auth(std::function<void(const DeviceCodeInfo &)> 
                 (void)jailbreak::request_jailbreak();
             }
 
-#if defined(__PROSPERO__) || defined(__Prospero__) || defined(__PS5__)
-            std::string dns_diag;
-            if (!check_domain_dns("oauth2.googleapis.com", dns_diag))
-            {
-                auth_state_.store(AuthState::Error);
-                std::lock_guard<std::mutex> lock(mutex_);
-                last_error_ = is_es
-                    ? "DNS bloquea Google (0x8041013D): oauth2.googleapis.com redirigido. Configura DNS secundario o lista blanca en ESP32."
-                    : "DNS blocks Google (0x8041013D): oauth2.googleapis.com redirected. Configure secondary DNS or whitelist in ESP32.";
-                user_code_ = is_es ? "DNS BLOQ" : "DNS BLOCK";
-                MACHETE_LOG("[CLOUD]", "%s", dns_diag.c_str());
-                ::machete::log::flush();
-                return;
-            }
-#endif
 
             // Petición inicial RFC 8628 Device Authorization a Google
             const std::string post_body =

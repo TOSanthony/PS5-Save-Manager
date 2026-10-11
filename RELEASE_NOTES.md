@@ -41,13 +41,14 @@ Built with a hardware-accelerated OpenGL 4.6 SDF renderer, MacheteSVG delivers a
 ### Key Capabilities
 
 #### 1. Zero-Corruption Save Architecture
-- **Keystone File Preservation:** Preserves console-specific `sce_sys/keystone` and `sce_sys/param.sfo` files during restoration. Only save payload containers (e.g., `data000.bin`) are updated, allowing clean auto-resigning of saves downloaded from other users or consoles.
+- **Atomic Keystone and SealedKey Synchronization:** Restores matching `keystone`, `sealedkey`, `param.sfo`, and payload containers atomically from backups. Prevents cryptographic PFS key derivation mismatches and eliminates the "Save data is corrupted" error on PS4 games in backward compatibility.
+- **User Ownership & Open Permissions:** Dynamically detects user account ownership (`/user/home/<user_id>`) and applies matching UID/GID alongside open file permissions (`0666` files, `0777` directories) with kernel sync flush, ensuring unprivileged game processes load restored saves immediately without permission errors.
 - **Error CE-108255-1 Elimination:** Employs orderly `sceSaveDataUmount` operations, allowing the Prospero kernel to seal PFS containers cleanly.
-- **Non-Blocking Clean Vnode Write:** Enforces clean atomic POSIX stream flushing without thread-blocking kernel fsync locks, preventing system watchdog timeouts and kernel lockups.
 - **Dummy Save Safeguard:** Prompts users to run newly installed games once before restoring saves to generate genuine local hardware keys.
 
 #### 2. Google Drive Cloud Synchronization
 - **OAuth 2.0 Device Flow (RFC 8628):** Link your Google account securely without entering credentials on the console. Simply navigate to `https://www.google.com/device` and enter the code shown on screen.
+- **Native libSceHttp2 Networking:** Employs native Sony HTTP/2 client routines without unsupported FreeBSD `getaddrinfo` libc calls, eliminating system panics and providing clean diagnostics for DNS/ESP32 blocker environments (`0x8041013D`).
 - **Asynchronous Execution:** Upload and download operations run inside dedicated worker threads, ensuring the UI remains responsive at 60 FPS.
 - **Storage Standard:** Backups are structured in cloud root directory `/MacheteSVG/[TitleID - Game Name]/`.
 
@@ -80,7 +81,7 @@ Built with a hardware-accelerated OpenGL 4.6 SDF renderer, MacheteSVG delivers a
 
 | File | Size | SHA-256 Checksum |
 | :--- | :--- | :--- |
-| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,944,398 bytes) | `9fadc722be6820cb2afa2c93411c779b7be56ab5451a7d701556553a71a928a2` |
+| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,943,821 bytes) | `40abf5b49e8831860962c023c3c599a88fc5d1ea3a711b2d1acbab0b349616fb` |
 
 All package files are validated with open-mode permissions (`0777`) for out-of-the-box execution on jailbroken PlayStation 5 systems.
 
@@ -132,13 +133,14 @@ Desarrollado con renderizado acelerado por hardware OpenGL 4.6 SDF, MacheteSVG o
 ### Capacidades Principales
 
 #### 1. Arquitectura de Guardado con Cero Corrupción
-- **Preservación del Archivo Keystone:** Mantiene intactos los archivos de consola `sce_sys/keystone` y `sce_sys/param.sfo` durante la restauración. Solo se actualiza el contenedor de datos (`data000.bin`), permitiendo resignar partidas descargadas de otros usuarios sin rechazo del sistema.
+- **Sincronización Atómica de Keystone y SealedKey:** Restaura de forma atómica el conjunto completo de archivos (`keystone`, `sealedkey`, `param.sfo` y contenedores de datos). Evita fallos de derivación de claves PFS entre consolas o partidas previas, eliminando el error de datos corruptos en juegos de PS4 en retrocompatibilidad.
+- **Propiedad de Usuario y Permisos Abiertos:** Detecta dinámicamente la propiedad de la cuenta del usuario (`/user/home/<user_id>`) y asigna los UID/GID correspondientes junto con permisos abiertos (`0666` en archivos, `0777` en directorios) y sincronización con el kernel, garantizando que el juego lea la partida inmediatamente sin conflictos de permisos.
 - **Eliminación del Error CE-108255-1:** Realiza un desmontaje ordenado mediante `sceSaveDataUmount`, permitiendo que el kernel de Prospero selle los contenedores PFS de forma limpia.
-- **Escritura Limpia de Vnodes sin Bloqueo:** Realiza vaciado limpio de flujos POSIX sin bloqueos de fsync en el kernel, previniendo congelamientos y el reinicio forzado del sistema.
 - **Protección de Partida Base:** Avisa al usuario para iniciar una vez cualquier juego nuevo y generar las claves criptográficas locales legítimas.
 
 #### 2. Sincronización en la Nube con Google Drive
 - **OAuth 2.0 Device Flow (RFC 8628):** Vincula tu cuenta de Google de forma segura sin ingresar contraseñas en la consola. Ingresa a `https://www.google.com/device` e introduce el código que se muestra en pantalla.
+- **Conectividad Nativa mediante libSceHttp2:** Utiliza el cliente HTTP/2 nativo de Sony sin llamadas incompatibles a `getaddrinfo` de libc FreeBSD, eliminando cuelgues del sistema y ofreciendo diagnósticos claros en entornos con bloqueo DNS/ESP32 (`0x8041013D`).
 - **Ejecución Asíncrona:** Las transferencias se ejecutan en hilos dedicados para que la interfaz se mantenga a 60 FPS sin bloqueos.
 - **Estructura Estándar:** Las copias de seguridad se organizan en la carpeta `/MacheteSVG/[TitleID - Nombre del Juego]/`.
 
@@ -171,7 +173,7 @@ Desarrollado con renderizado acelerado por hardware OpenGL 4.6 SDF, MacheteSVG o
 
 | Archivo | Tamaño | Suma de Verificación SHA-256 |
 | :--- | :--- | :--- |
-| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,944,398 bytes) | `9fadc722be6820cb2afa2c93411c779b7be56ab5451a7d701556553a71a928a2` |
+| `MacheteSVG_v1.0.0_PS5.zip` | 29.5 MB (30,943,821 bytes) | `40abf5b49e8831860962c023c3c599a88fc5d1ea3a711b2d1acbab0b349616fb` |
 
 Todos los archivos han sido generados y verificados con permisos de modo abierto (`0777`) para ejecución inmediata en consolas PlayStation 5.
 

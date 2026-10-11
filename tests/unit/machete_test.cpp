@@ -367,4 +367,90 @@ TEST_F(MacheteTest, AsyncOperationProtectionAndRender)
     expect_drawable(*machete_);
 }
 
+TEST_F(MacheteTest, KeystoneAndSealedKeyAtomicRestore)
+{
+    machete::scanner::ScannedGame game;
+    game.title_id = "CUSA03173";
+    game.title = "Bloodborne";
+    const std::string target_save_dir = "/tmp/machete_test_target_save";
+    mkdir(target_save_dir.c_str(), 0777);
+
+    // 1. Simular partida existente en consola con keystone viejo de la consola
+    std::FILE *f_old_k = std::fopen((target_save_dir + "/keystone").c_str(), "wb");
+    ASSERT_NE(f_old_k, nullptr);
+    std::fputs("CONSOLE_OLD_KEYSTONE", f_old_k);
+    std::fclose(f_old_k);
+
+    std::FILE *f_old_s = std::fopen((target_save_dir + "/sealedkey").c_str(), "wb");
+    ASSERT_NE(f_old_s, nullptr);
+    std::fputs("CONSOLE_OLD_SEALEDKEY", f_old_s);
+    std::fclose(f_old_s);
+
+    game.save_path = target_save_dir;
+
+    // 2. Simular paquete de respaldo en almacenamiento externo con keystone y sealedkey coincidentes
+    const std::string backup_root = "/tmp/machete_test_backup_usb/MacheteSVG";
+    const std::string backup_game_dir = backup_root + "/CUSA03173 - Bloodborne";
+    mkdir("/tmp/machete_test_backup_usb", 0777);
+    mkdir(backup_root.c_str(), 0777);
+    mkdir(backup_game_dir.c_str(), 0777);
+
+    std::FILE *f_new_k = std::fopen((backup_game_dir + "/keystone").c_str(), "wb");
+    ASSERT_NE(f_new_k, nullptr);
+    std::fputs("BACKUP_NEW_KEYSTONE", f_new_k);
+    std::fclose(f_new_k);
+
+    std::FILE *f_new_s = std::fopen((backup_game_dir + "/sealedkey").c_str(), "wb");
+    ASSERT_NE(f_new_s, nullptr);
+    std::fputs("BACKUP_NEW_SEALEDKEY", f_new_s);
+    std::fclose(f_new_s);
+
+    std::FILE *f_data = std::fopen((backup_game_dir + "/savedata0.bin").c_str(), "wb");
+    ASSERT_NE(f_data, nullptr);
+    std::fputs("SAVEDATA_DATA_PAYLOAD", f_data);
+    std::fclose(f_data);
+
+    machete::save::BackupItem item;
+    item.title_id = "CUSA03173";
+    item.title = "Bloodborne";
+    item.folder_path = backup_game_dir;
+    item.device_label = "USB Backup";
+    item.total_bytes = 1024;
+
+    // 3. Ejecutar restauracion
+    auto res = machete::save::restore_backup_item(game, item, nullptr);
+    EXPECT_TRUE(res.success);
+
+    // 4. Verificar que el keystone restaurado sea el del respaldo (emparejado con su sealedkey)
+    // y NUNCA el keystone viejo de la consola para evitar corrupcion criptografica
+    char read_buf[64] = {0};
+    std::FILE *f_chk_k = std::fopen((target_save_dir + "/keystone").c_str(), "rb");
+    ASSERT_NE(f_chk_k, nullptr);
+    std::size_t rk = std::fread(read_buf, 1, sizeof(read_buf) - 1, f_chk_k);
+    read_buf[rk] = '\0';
+    std::fclose(f_chk_k);
+    EXPECT_STREQ(read_buf, "BACKUP_NEW_KEYSTONE");
+
+    char read_buf_s[64] = {0};
+    std::FILE *f_chk_s = std::fopen((target_save_dir + "/sealedkey").c_str(), "rb");
+    ASSERT_NE(f_chk_s, nullptr);
+    std::size_t rs = std::fread(read_buf_s, 1, sizeof(read_buf_s) - 1, f_chk_s);
+    read_buf_s[rs] = '\0';
+    std::fclose(f_chk_s);
+    EXPECT_STREQ(read_buf_s, "BACKUP_NEW_SEALEDKEY");
+
+    // Limpieza
+    std::remove((target_save_dir + "/keystone").c_str());
+    std::remove((target_save_dir + "/sealedkey").c_str());
+    std::remove((target_save_dir + "/savedata0.bin").c_str());
+    rmdir(target_save_dir.c_str());
+
+    std::remove((backup_game_dir + "/keystone").c_str());
+    std::remove((backup_game_dir + "/sealedkey").c_str());
+    std::remove((backup_game_dir + "/savedata0.bin").c_str());
+    rmdir(backup_game_dir.c_str());
+    rmdir(backup_root.c_str());
+    rmdir("/tmp/machete_test_backup_usb");
+}
+
 } // namespace hui::testing
