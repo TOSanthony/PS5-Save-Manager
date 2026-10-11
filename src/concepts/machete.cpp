@@ -1402,7 +1402,7 @@ class Machete final : public app::Concept
                 close_look.focus = 1.0f;
                 const bool is_es = (machete::i18n::current_language() == machete::i18n::Language::Spanish);
                 const char *btn_text = (drive.auth_state() == machete::cloud::AuthState::Error)
-                                           ? (is_es ? "Reintentar Conexión (X)" : "Retry Connection (X)")
+                                           ? (is_es ? "Reintentar Conexion (X)" : "Retry Connection (X)")
                                            : machete::i18n::tr(machete::i18n::StringId::DriveClose);
                 paint.button(close_btn, btn_text, ui::ButtonKind::secondary, close_look);
             }
